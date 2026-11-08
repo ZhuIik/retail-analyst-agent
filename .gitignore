@@ -1,9 +1,5 @@
-# Assignment materials and private working notes (kept locally, never published)
-Opsfleet_task.txt
-Welcome_messege.txt
-bq_client.py
+# Private working notes and assignment materials (a separate private repository)
 notes/
-docs/streams/
 
 # Secrets
 .env
