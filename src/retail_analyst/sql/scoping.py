@@ -74,16 +74,19 @@ def _exposed_columns(table_spec: dict, salt: str) -> list[exp.Expression]:
         if not spec.get("exposed", True):
             continue
         col = exp.column(name)
-        if spec.get("hashed"):
-            hashed = exp.func(
-                "FARM_FINGERPRINT",
-                exp.func("CONCAT", exp.Literal.string(salt), exp.cast(col, "STRING"), dialect=DIALECT),
-                dialect=DIALECT,
-            )
-            columns.append(exp.alias_(hashed, name))
-        else:
-            columns.append(col)
+        columns.append(exp.alias_(pseudonym(col, salt), name) if spec.get("hashed") else col)
     return columns
+
+
+def pseudonym(col: exp.Expression, salt: str) -> exp.Expression:
+    """'C-' + 12 hex chars of SHA256(salt || id): readable in a report, stable, irreversible without the salt.
+
+    48 bits keep collisions negligible for ~100k customers; joins and COUNT(DISTINCT) still work.
+    """
+    salted = exp.func("CONCAT", exp.Literal.string(salt), exp.cast(col, "STRING"), dialect=DIALECT)
+    digest = exp.func("TO_HEX", exp.func("SHA256", salted, dialect=DIALECT), dialect=DIALECT)
+    short = exp.func("SUBSTR", digest, exp.Literal.number(1), exp.Literal.number(12), dialect=DIALECT)
+    return exp.func("CONCAT", exp.Literal.string("C-"), short, dialect=DIALECT)
 
 
 def rewrite_tables(refs: list[tuple[exp.Table, str]]) -> None:

@@ -9,7 +9,7 @@ tables:
     description: One row per customer order. Order-level fields (num_of_item) may include items of other brands; use order_items for money and product metrics.
     columns:
       order_id: {type: INTEGER, description: Order id; joins order_items.order_id}
-      user_id: {type: INTEGER, hashed: true, description: Customer pseudonym; joins users.id}
+      user_id: {type: STRING, hashed: true, description: "Customer pseudonym, e.g. C-3fa9b1c2d4e5; joins users.id"}
       status: {type: STRING, description: "Order status: Cancelled, Complete, Processing, Returned, Shipped"}
       gender: {type: STRING, description: Customer gender (M/F)}
       created_at: {type: TIMESTAMP, description: When the order was placed}
@@ -23,7 +23,7 @@ tables:
     columns:
       id: {type: INTEGER, description: Order item id}
       order_id: {type: INTEGER, description: Joins orders.order_id}
-      user_id: {type: INTEGER, hashed: true, description: Customer pseudonym; joins users.id}
+      user_id: {type: STRING, hashed: true, description: "Customer pseudonym, e.g. C-3fa9b1c2d4e5; joins users.id"}
       product_id: {type: INTEGER, description: Joins products.id}
       inventory_item_id: {type: INTEGER}
       status: {type: STRING, description: "Item status: Cancelled, Complete, Processing, Returned, Shipped"}
@@ -49,7 +49,7 @@ tables:
   users:
     description: Customers (only those who bought products in the user's scope). Personal data columns are removed.
     columns:
-      id: {type: INTEGER, hashed: true, description: Customer pseudonym}
+      id: {type: STRING, hashed: true, description: "Customer pseudonym, e.g. C-3fa9b1c2d4e5"}
       age: {type: INTEGER}
       gender: {type: STRING, description: M/F}
       state: {type: STRING}

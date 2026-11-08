@@ -180,6 +180,12 @@ class ToolResult(BaseModel):
             shown = len(self.data.rows)
             total = self.rows_total if self.rows_total is not None else shown
             parts.append(f"rows shown: {shown} of {total}")
+            if shown < total:
+                # Seen live: without this the model paged through results with extra queries (and calls).
+                parts.append(
+                    "Only the first rows are shown. Do not page through the rest: aggregate, rank or filter "
+                    "in SQL so that what you need fits."
+                )
             lines = [" | ".join(self.data.columns)]
             lines += [" | ".join("" if v is None else str(v) for v in row) for row in self.data.rows]
             parts.append("<data>\n" + "\n".join(lines) + "\n</data>")

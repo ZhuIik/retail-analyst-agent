@@ -220,12 +220,37 @@ def check_functions(root: exp.Expression, forbidden_prefixes: list[str]) -> None
 
 
 def check_no_star(root: exp.Expression) -> None:
-    """`SELECT *` scans every column and BigQuery bills by columns read (D11)."""
+    """`SELECT *` over a base table scans every column, and BigQuery bills by columns read (D11).
+
+    `SELECT *` over the model's own CTEs or subqueries is allowed: their columns are already
+    chosen, so it costs nothing extra. Seen live: the model often ends a CTE chain with
+    `SELECT * FROM final_cte`, and rejecting that only burned a model call per question.
+    """
     for star in root.find_all(exp.Star):
-        if not isinstance(star.parent, exp.Count):  # COUNT(*) reads no columns
+        if isinstance(star.parent, exp.Count):  # COUNT(*) reads no columns
+            continue
+        select = star.find_ancestor(exp.Select)
+        if select is None or not _reads_only_derived_sources(select):
             raise _violation(
-                "SELECT * (including t.* and * EXCEPT) is not allowed. List the columns you need explicitly."
+                "SELECT * (including t.* and * EXCEPT) over a table is not allowed. "
+                "List the columns you need explicitly."
             )
+
+
+def _reads_only_derived_sources(select: exp.Select) -> bool:
+    """True if every FROM/JOIN source of this SELECT is a visible CTE or a subquery (never a base table)."""
+    from_ = select.args.get("from_") or select.args.get("from")
+    sources = ([from_.this] if from_ else []) + [join.this for join in select.args.get("joins") or []]
+    if not sources:
+        return False
+    for source in sources:
+        if isinstance(source, exp.Subquery):
+            continue
+        if not isinstance(source, exp.Table) or len(source.parts) != 1:
+            return False
+        if not cte_is_visible(source, source.name.lower()):
+            return False
+    return True
 
 
 def personal_columns(schema: dict) -> set[str]:

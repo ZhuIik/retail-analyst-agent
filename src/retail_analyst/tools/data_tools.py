@@ -65,9 +65,9 @@ def _execute(sql: str, purpose: str, ctx: ToolContext) -> ToolOutcome:
         labels = {"user": ctx.user.user_id, "session": ctx.session_id, "trace": trace.trace_id or "none"}
         result = bq.execute(guard.scoped_sql, labels=labels)
     except AgentError as e:
-        trace.event("error", kind=e.kind, message=e.user_message, detail=e.detail)
         if e.kind.is_fatal:
-            raise
+            raise  # the graph traces it and ends the turn (D12)
+        trace.event("error", kind=e.kind, message=e.user_message, detail=e.detail)
         return _error(e.kind, e.user_message)
 
     query_id = f"q{next(ctx.services['query_counter'])}"

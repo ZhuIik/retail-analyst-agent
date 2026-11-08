@@ -24,7 +24,7 @@ sql:
   dry_run_max_bytes: 500000000      # above this the model is asked to narrow the query
   query_timeout_s: 60
   max_transient_retries: 3
-  preview_rows: 20                  # rows shown to the model; full result stays in state
+  preview_rows: 50                  # rows shown to the model; full result (up to stored_rows) stays in state
   stored_rows: 500                  # rows kept in state per query
   forbidden_function_prefixes: ["AI.", "ML.", "EXTERNAL_", "VECTOR_SEARCH", "KEYS.", "AEAD."]
 

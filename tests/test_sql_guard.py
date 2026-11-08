@@ -319,10 +319,25 @@ def test_empty_query_is_invalid_sql(sql):
         "SELECT * REPLACE (1 AS status) FROM orders",
         "SELECT status FROM (SELECT * FROM orders)",
         "WITH x AS (SELECT * FROM products) SELECT brand FROM x",
+        "WITH x AS (SELECT id FROM products) SELECT * FROM x JOIN orders o ON TRUE",  # one source is a table
+        "WITH x AS (SELECT * FROM products) SELECT * FROM x",  # inner star still over a table
     ],
 )
 def test_select_star_is_rejected(sql):
     assert "List the columns" in rejected(sql)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH t AS (SELECT status, COUNT(*) AS n FROM orders GROUP BY status) SELECT * FROM t ORDER BY n DESC",
+        "WITH a AS (SELECT brand FROM products), b AS (SELECT a.* FROM a) SELECT * FROM b",
+        "SELECT * FROM (SELECT status FROM orders) AS s",
+    ],
+)
+def test_select_star_over_own_cte_or_subquery_is_allowed(sql):
+    # Columns are already chosen inside the CTE/subquery, so the star reads nothing extra (D11).
+    ok(sql)
 
 
 def test_count_star_is_allowed():
@@ -466,10 +481,10 @@ def test_scoped_users_has_no_personal_columns_and_hashed_id():
 def assert_hashed(select: exp.Select, column: str) -> None:
     expr = next(e for e in select.expressions if e.alias_or_name == column)
     assert isinstance(expr, exp.Alias)
-    fingerprint = expr.this
-    assert fingerprint.sql("bigquery").upper().startswith("FARM_FINGERPRINT(CONCAT(")
-    assert SALT in [lit.this for lit in fingerprint.find_all(exp.Literal) if lit.is_string]
-    assert fingerprint.find(exp.Column).name == column
+    pseudonym = expr.this
+    assert "SHA256(CONCAT(" in pseudonym.sql("bigquery").upper()
+    assert SALT in [lit.this for lit in pseudonym.find_all(exp.Literal) if lit.is_string]
+    assert pseudonym.find(exp.Column).name == column
 
 
 def test_customer_ids_are_hashed_in_every_table():
@@ -658,7 +673,7 @@ def test_messages_never_contain_salt_or_scoped_sql(sql):
     # Messages may quote the model's own SQL, never what the guard adds.
     result = guard(sql)
     assert not result.ok
-    for secret in (SALT, "s3cret", "__scoped_", "FARM_FINGERPRINT"):
+    for secret in (SALT, "s3cret", "__scoped_", "SHA256"):
         assert secret not in result.message
 
 
