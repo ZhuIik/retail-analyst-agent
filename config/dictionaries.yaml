@@ -1,0 +1,32 @@
+# Small value lists shown to the model (D11): exact spellings for common filters.
+# Long lists (brands, ~2,700 values) are NOT here — the model looks them up with describe_data.
+
+departments: [Men, Women]
+order_statuses: [Cancelled, Complete, Processing, Returned, Shipped]
+categories:
+  - Accessories
+  - Active
+  - Blazers & Jackets
+  - Clothing Sets
+  - Dresses
+  - Fashion Hoodies & Sweatshirts
+  - Intimates
+  - Jeans
+  - Jumpsuits & Rompers
+  - Leggings
+  - Maternity
+  - Outerwear & Coats
+  - Pants
+  - Pants & Capris
+  - Plus
+  - Shorts
+  - Skirts
+  - Sleep & Lounge
+  - Socks
+  - Socks & Hosiery
+  - Suits
+  - Suits & Sport Coats
+  - Sweaters
+  - Swim
+  - Tops & Tees
+  - Underwear

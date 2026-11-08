@@ -1,0 +1,36 @@
+# Metric definitions (D2, П4). Business decisions, not code: the team's answer to question 4
+# changes this file only. The agent must state which definitions it used (assumptions field).
+# Always included in the system prompt; wins over anything the model "knows".
+
+metrics:
+  revenue:
+    definition: Sum of order_items.sale_price for items whose status is not 'Cancelled' or 'Returned'.
+    sql: SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0))
+  units_sold:
+    definition: Count of order_items rows whose status is not 'Cancelled' or 'Returned'.
+  orders:
+    definition: Count of distinct order_id containing at least one item in scope.
+  average_order_value:
+    definition: Revenue divided by the number of distinct orders with at least one non-cancelled, non-returned item.
+  gross_margin:
+    definition: Revenue minus cost of the sold items (products.cost), for non-cancelled, non-returned items.
+  margin_rate:
+    definition: Gross margin divided by revenue.
+  return_rate:
+    definition: Returned items divided by items that were not cancelled.
+  cancellation_rate:
+    definition: Cancelled items divided by all items.
+  active_customer:
+    definition: A customer with at least one non-cancelled purchase in the last 90 days before the end of the analysed period.
+  churned_customer:
+    definition: A customer who purchased before but has no purchase in the last 90 days before the end of the analysed period.
+  new_customer:
+    definition: A customer whose first purchase falls in the analysed period.
+  repeat_rate:
+    definition: Share of customers in the period with two or more orders.
+
+conventions:
+  - Dates are order_items.created_at (when the item was ordered) unless the user asks otherwise.
+  - The current month is incomplete. Compare full months; if the current month is shown, label it as partial.
+  - '"Last month" means the last full calendar month; "this year" means year-to-date.'
+  - Percentages and changes are computed in SQL, not by hand.

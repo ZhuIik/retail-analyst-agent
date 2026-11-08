@@ -1,0 +1,26 @@
+# Prototype stand-in for SSO + corporate directory groups (П2).
+# `access.column` is the access attribute (brand / category / department); null = all products.
+# Brand-level data is thin in this dataset (median brand: ~12 items sold), so the demo uses
+# top brands and a category manager. Changing the access model = editing this file, not code.
+
+users:
+  ceo:
+    display_name: Chief Executive Officer
+    role: ceo
+    access:
+      column: null
+      values: []
+
+  anna:
+    display_name: Anna (Brand Manager)
+    role: brand_manager
+    access:
+      column: brand
+      values: ["Calvin Klein", "Diesel", "Carhartt"]
+
+  mark:
+    display_name: Mark (Category Manager)
+    role: category_manager
+    access:
+      column: category
+      values: ["Jeans", "Outerwear & Coats"]

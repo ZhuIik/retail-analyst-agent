@@ -1,0 +1,8 @@
+- BigQuery Standard SQL. Refer to tables by their bare names: orders, order_items, products, users.
+- created_at / shipped_at / returned_at are TIMESTAMP. For calendar grouping use DATE_TRUNC(DATE(created_at), MONTH) (argument order: value, part).
+- Filter dates with DATE(created_at) BETWEEN DATE '2026-01-01' AND DATE '2026-01-31', or TIMESTAMP comparisons with TIMESTAMP literals.
+- There is no ILIKE: use LOWER(col) LIKE '%text%'.
+- Use SAFE_DIVIDE(a, b) for ratios.
+- List the columns you need; SELECT * is rejected. COUNT(*) is fine.
+- Do sorting, top-N and aggregation in SQL, not in your head: you only see the first rows of a result.
+- Customer ids are pseudonyms: use them for joins and COUNT(DISTINCT ...), never try to identify a person.

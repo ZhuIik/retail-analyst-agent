@@ -1,0 +1,36 @@
+# Runtime settings. Limits are starting values derived from budgets and calibrated on p95 (H18).
+# Secrets and model overrides live in .env, not here.
+
+dataset: bigquery-public-data.thelook_ecommerce
+
+models:
+  # Free-tier limits verified in AI Studio (Nov 2026): flash-lite 15 RPM / 500 RPD each,
+  # separate quotas per model -> the fallback adds quota, not just availability (D17).
+  analyst: gemini-3.5-flash-lite
+  fallbacks: [gemini-3.1-flash-lite]
+  temperature: null           # Gemini 3.x uses fixed sampling defaults and ignores temperature
+  request_timeout_s: 60
+  max_sdk_retries: 1          # keep low so a 429 switches to the fallback instead of waiting
+  requests_per_minute: 14     # client-side rate limiter, just under the 15 RPM free-tier limit
+
+agent:
+  max_llm_calls_per_turn: 8   # hard limit, includes retries and fallback calls
+  max_sql_fix_attempts: 3
+  history_messages: 12        # older tool results are summarised before each agent call
+
+sql:
+  default_limit: 1000
+  max_bytes_billed: 1000000000      # 1 GB hard cap per query (BigQuery enforces it)
+  dry_run_max_bytes: 500000000      # above this the model is asked to narrow the query
+  query_timeout_s: 60
+  max_transient_retries: 3
+  preview_rows: 20                  # rows shown to the model; full result stays in state
+  stored_rows: 500                  # rows kept in state per query
+  forbidden_function_prefixes: ["AI.", "ML.", "EXTERNAL_", "VECTOR_SEARCH", "KEYS.", "AEAD."]
+
+reports:
+  db_path: data/reports.sqlite
+  bulk_delete_threshold: 3          # above this, confirmation requires typing the exact count
+
+tracing:
+  dir: traces

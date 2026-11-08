@@ -1,0 +1,67 @@
+# Static schema description (П4). This is what the model sees: the *scoped* tables.
+# `exposed: false` columns do not exist in the scoped tables at all (PII, D10) — the model
+# cannot select them, BigQuery would answer "Unrecognized name".
+# `hashed: true` columns hold salted hashes of customer ids (D10, А1): joins and
+# COUNT(DISTINCT) work, real ids are never visible.
+
+tables:
+  orders:
+    description: One row per customer order. Order-level fields (num_of_item) may include items of other brands; use order_items for money and product metrics.
+    columns:
+      order_id: {type: INTEGER, description: Order id; joins order_items.order_id}
+      user_id: {type: INTEGER, hashed: true, description: Customer pseudonym; joins users.id}
+      status: {type: STRING, description: "Order status: Cancelled, Complete, Processing, Returned, Shipped"}
+      gender: {type: STRING, description: Customer gender (M/F)}
+      created_at: {type: TIMESTAMP, description: When the order was placed}
+      returned_at: {type: TIMESTAMP}
+      shipped_at: {type: TIMESTAMP}
+      delivered_at: {type: TIMESTAMP}
+      num_of_item: {type: INTEGER, description: Items in the whole order (all brands)}
+
+  order_items:
+    description: One row per item sold. The main table for revenue, units and product metrics.
+    columns:
+      id: {type: INTEGER, description: Order item id}
+      order_id: {type: INTEGER, description: Joins orders.order_id}
+      user_id: {type: INTEGER, hashed: true, description: Customer pseudonym; joins users.id}
+      product_id: {type: INTEGER, description: Joins products.id}
+      inventory_item_id: {type: INTEGER}
+      status: {type: STRING, description: "Item status: Cancelled, Complete, Processing, Returned, Shipped"}
+      created_at: {type: TIMESTAMP, description: When the item was ordered}
+      shipped_at: {type: TIMESTAMP}
+      delivered_at: {type: TIMESTAMP}
+      returned_at: {type: TIMESTAMP}
+      sale_price: {type: FLOAT, description: Price the item was sold for (revenue)}
+
+  products:
+    description: Product catalog.
+    columns:
+      id: {type: INTEGER, description: Product id; joins order_items.product_id}
+      cost: {type: FLOAT, description: Unit cost (margin = sale_price - cost)}
+      category: {type: STRING, description: "26 categories, e.g. Jeans, Outerwear & Coats, Tops & Tees"}
+      name: {type: STRING, description: Product name}
+      brand: {type: STRING, description: "Brand (~2,700 values; look up exact spelling with describe_data)"}
+      retail_price: {type: FLOAT, description: List price}
+      department: {type: STRING, description: "Men or Women"}
+      sku: {type: STRING}
+      distribution_center_id: {type: INTEGER}
+
+  users:
+    description: Customers (only those who bought products in the user's scope). Personal data columns are removed.
+    columns:
+      id: {type: INTEGER, hashed: true, description: Customer pseudonym}
+      age: {type: INTEGER}
+      gender: {type: STRING, description: M/F}
+      state: {type: STRING}
+      city: {type: STRING}
+      country: {type: STRING}
+      traffic_source: {type: STRING, description: "Acquisition channel, e.g. Search, Organic, Facebook, Email, Display"}
+      created_at: {type: TIMESTAMP, description: Customer sign-up time}
+      first_name: {type: STRING, exposed: false}
+      last_name: {type: STRING, exposed: false}
+      email: {type: STRING, exposed: false}
+      street_address: {type: STRING, exposed: false}
+      postal_code: {type: STRING, exposed: false}
+      latitude: {type: FLOAT, exposed: false}
+      longitude: {type: FLOAT, exposed: false}
+      user_geom: {type: GEOGRAPHY, exposed: false}
