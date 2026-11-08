@@ -53,7 +53,7 @@ tables:
       age: {type: INTEGER}
       gender: {type: STRING, description: M/F}
       state: {type: STRING}
-      city: {type: STRING}
+      city: {type: STRING, exposed: false}  # with age + gender a quasi-identifier for one customer
       country: {type: STRING}
       traffic_source: {type: STRING, description: "Acquisition channel, e.g. Search, Organic, Facebook, Email, Display"}
       created_at: {type: TIMESTAMP, description: Customer sign-up time}

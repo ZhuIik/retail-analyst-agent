@@ -474,7 +474,7 @@ def test_scoped_users_has_no_personal_columns_and_hashed_id():
     tree = ok("SELECT u.country, COUNT(DISTINCT u.id) AS n FROM users u GROUP BY 1", user="ceo")
     users = ctes(tree)["__scoped_users"]
     names = select_names(users)
-    assert names == ["id", "age", "gender", "state", "city", "country", "traffic_source", "created_at"]
+    assert names == ["id", "age", "gender", "state", "country", "traffic_source", "created_at"]
     assert_hashed(users, "id")
 
 

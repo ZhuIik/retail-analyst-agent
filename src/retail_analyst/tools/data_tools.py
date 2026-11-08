@@ -23,7 +23,7 @@ class RunSqlArgs(BaseModel):
     purpose: str = Field(description="Short description of what this query answers, e.g. 'monthly revenue 2026'.")
 
 
-DescribeColumn = Literal["brand", "category", "department", "status", "traffic_source", "country", "state", "city"]
+DescribeColumn = Literal["brand", "category", "department", "status", "traffic_source", "country", "state"]
 _DESCRIBE_TABLE = {
     "brand": "products",
     "category": "products",
@@ -32,7 +32,6 @@ _DESCRIBE_TABLE = {
     "traffic_source": "users",
     "country": "users",
     "state": "users",
-    "city": "users",
 }
 
 
