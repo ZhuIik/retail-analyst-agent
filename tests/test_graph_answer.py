@@ -66,3 +66,8 @@ def test_number_check_ignores_query_ids_and_missing_queries():
 def test_number_check_ignores_small_prose_counts():
     fact = Fact(text="The top 3 categories over the last 6 months", query_ids=["q1"])
     assert check_numbers(_answer(fact), {"q1": {"rows": [[1]]}}) == []
+
+
+def test_number_check_ignores_quoted_labels():
+    fact = Fact(text="The top age group is '25-34' and \"Under 25\" is second.", query_ids=["q1"])
+    assert check_numbers(_answer(fact), {"q1": {"rows": [[1]]}}) == []

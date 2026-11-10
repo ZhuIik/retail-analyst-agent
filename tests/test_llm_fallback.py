@@ -129,7 +129,9 @@ def test_primary_answers_and_reports_llm_call(models) -> None:
 def test_simulated_429_falls_back(models) -> None:
     model, events = build(FaultInjector({"llm_429"}))
     assert model.invoke([HumanMessage("hi")]).content == "answer from backup"
-    assert events[0] == ("fallback", {"from_model": "primary", "to_model": "backup", "error_kind": "transient"})
+    kind, payload = events[0]
+    assert kind == "fallback" and payload.pop("detail")  # the cause is recorded for debugging
+    assert payload == {"from_model": "primary", "to_model": "backup", "error_kind": "transient"}
     assert events[1][0] == "llm_call" and events[1][1]["model"] == "backup"
     assert models["primary"].calls == 0  # the fault fires before the request
 

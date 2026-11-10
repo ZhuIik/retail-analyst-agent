@@ -121,7 +121,11 @@ def _observed(
                 raise  # likely a bug or a bad request: keep the original traceback
             detail = f"{name}: {type(exc).__name__}: {str(exc)[:1000]}"
             if kind in _FALLBACK_KINDS and next_name:
-                emit("fallback", {"from_model": name, "to_model": next_name, "error_kind": kind.value})
+                # The cause (429 per-minute vs 503 overload) matters when debugging why fallbacks happen.
+                emit(
+                    "fallback",
+                    {"from_model": name, "to_model": next_name, "error_kind": kind.value, "detail": detail[:300]},
+                )
                 raise FallbackableLLMError(kind, _user_message(kind), detail) from exc
             raise AgentError(kind, _user_message(kind), detail) from exc
         usage = getattr(message, "usage_metadata", None) or {}

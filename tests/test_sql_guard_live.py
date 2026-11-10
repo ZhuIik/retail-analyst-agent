@@ -51,7 +51,7 @@ def _scoped(sql: str, user: str) -> str:
         "SELECT status, COUNT(*) AS n FROM orders GROUP BY status",
         "SELECT p.brand, SUM(oi.sale_price) AS revenue FROM order_items oi "
         "JOIN products p ON p.id = oi.product_id GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
-        "SELECT u.country, COUNT(DISTINCT o.user_id) AS buyers FROM orders o "
+        "SELECT u.country, COUNT(DISTINCT o.user_id) AS customers FROM orders o "
         "JOIN users u ON u.id = o.user_id GROUP BY 1",
     ],
 )

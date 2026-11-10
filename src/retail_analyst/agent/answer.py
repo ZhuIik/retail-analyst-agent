@@ -77,6 +77,10 @@ def _numeric_values(rows: Iterable[Iterable[Any]]) -> list[Decimal]:
     return out
 
 
+# Quoted text is a label from the data ('Under 25', "25-34"), not a number the model reports.
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
 def _is_year(match: re.Match[str]) -> bool:
     text = match.group(0).strip()
     return text.isdigit() and len(text) == 4 and 1900 <= int(text) <= 2100
@@ -99,7 +103,7 @@ def check_numbers(answer: AnswerSubmission, queries: Mapping[str, Mapping[str, A
     for fact in answer.facts:
         cited = fact.query_ids or list(queries)
         values = _numeric_values(row for q in cited if q in queries for row in queries[q].get("rows", []))
-        for match in _NUMBER.finditer(fact.text):
+        for match in _NUMBER.finditer(_QUOTED.sub(" ", fact.text)):
             if _is_year(match) or _is_prose_count(match):
                 continue
             if not any(abs(v - c) <= tol for c, tol in _candidates(match) for v in values):
