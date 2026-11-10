@@ -40,6 +40,9 @@ gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 uv run analyst-doctor           # checks the key, the models, BigQuery access and the dataset
 ```
 
+Without uv (Python 3.11–3.13): `python -m venv .venv`, activate it, `pip install -r requirements.txt`
+(pinned versions, installs this package too), then run the same commands without `uv run`.
+
 **Run**
 ```bash
 uv run analyst --user anna      # brand manager: Calvin Klein, Diesel, Carhartt
@@ -112,7 +115,7 @@ you> Delete my report about monthly revenue
 ├────┼───────────────────────────────────────────┼──────────────────┤
 │ 1  │ Monthly Revenue by Brand (Aug - Oct 2026) │ 2026-11-08T19:21 │
 └────┴───────────────────────────────────────────┴──────────────────┘
-Type yes to delete. Anything else cancels.
+Deletion is permanent. Type yes to delete; anything else cancels.
 you> yes
 · writing the answer
 I have successfully deleted your report about monthly revenue.
@@ -152,7 +155,7 @@ src/retail_analyst/
   tools/                tool registry (with risk classes), data tools, report tools
   bq/client.py          BigQuery: dry-run, byte cap, error classification, retries
   llm.py                Gemini models, fallback chain, rate limiter
-  reports/store.py      saved reports (SQLite), owner filter, soft delete, audit log
+  reports/store.py      saved reports (SQLite), owner filter, permanent delete, audit log
   tracing.py            JSONL traces
   faults.py             fault injection for --simulate
   doctor.py             environment check
