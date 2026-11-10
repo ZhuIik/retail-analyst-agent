@@ -1,6 +1,6 @@
-"""Whole-graph scenarios with a scripted model (D21, Б2). No network.
+"""Whole-graph scenarios with a scripted model. No network.
 
-The deletion scenarios prove the D16 guarantee: nothing is deleted without the user's exact
+The deletion scenarios prove the deletion guarantee: nothing is deleted without the user's exact
 confirmation, only the previewed snapshot is deleted, and never another owner's report.
 """
 
@@ -101,7 +101,7 @@ def _tool_messages(state: dict[str, Any]) -> list[ToolMessage]:
 
 
 def test_fatal_tool_error_ends_the_turn_without_another_model_call(tmp_path):
-    # D12: quota/auth/region errors cannot be fixed by rewriting SQL; the model must not burn calls on them.
+    # Quota/auth/region errors cannot be fixed by rewriting SQL; the model must not burn calls on them.
     h = Harness(tmp_path, [calls(("quota_sql", {}), ("run_sql", {"sql": "SELECT 1"}))])
     out = h.say("revenue?")
     assert out["final_text"] == "BigQuery daily quota is exhausted."
@@ -120,7 +120,7 @@ def _reply_to(state: dict[str, Any], tool: str) -> ToolMessage:
 
 
 # --------------------------------------------------------------------------------------
-# Deletion (D16)
+# Deletion
 # --------------------------------------------------------------------------------------
 
 
@@ -306,7 +306,7 @@ def test_llm_failure_ends_turn_honestly(tmp_path, monkeypatch, exc, expected):
 
 
 # --------------------------------------------------------------------------------------
-# Answers and saving (D15, Г1)
+# Answers and saving
 # --------------------------------------------------------------------------------------
 
 
@@ -335,7 +335,7 @@ def test_save_report_stores_exactly_the_text_shown(tmp_path):
     [summary] = h.store.list("alice")
     [report] = h.store.get_many("alice", [summary.report_id])
     assert report.body == shown
-    assert report.question == "revenue by state contact me at [redacted]"  # D14 net before storage
+    assert report.question == "revenue by state contact me at [redacted]"  # PII net before storage
     assert report.sql == ["SELECT state, revenue FROM t"]
     assert report.session_id == "s1"
     # The number check flags 7,777 (not in q1's rows) in the trace only; the answer is unchanged.

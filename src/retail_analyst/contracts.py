@@ -4,7 +4,7 @@ Every module talks to the others only through the types in this file. Keeping th
 place is what lets the SQL guard, the BigQuery layer, the report store and the agent graph be
 built and tested independently.
 
-Design rule (D1): the model proposes, the code guarantees. Nothing in these types is trusted
+Design rule: the model proposes, the code guarantees. Nothing in these types is trusted
 because the model said so: user identity comes from login, access scope from config, and
 every write is filtered by owner in code.
 """
@@ -17,7 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 # --------------------------------------------------------------------------------------
-# Identity and access (D10, П2)
+# Identity and access
 # --------------------------------------------------------------------------------------
 
 AccessColumn = Literal["brand", "category", "department"]
@@ -48,7 +48,7 @@ class UserContext(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
-# Errors (D12): who handles which error
+# Errors: who handles which error
 # --------------------------------------------------------------------------------------
 
 
@@ -97,7 +97,7 @@ class AgentError(Exception):
 
 
 # --------------------------------------------------------------------------------------
-# SQL guard (D10, D11) — implemented in retail_analyst.sql
+# SQL guard — implemented in retail_analyst.sql
 # --------------------------------------------------------------------------------------
 
 
@@ -122,7 +122,7 @@ class GuardResult(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
-# BigQuery execution (D11, D17) — implemented in retail_analyst.bq
+# BigQuery execution — implemented in retail_analyst.bq
 # --------------------------------------------------------------------------------------
 
 
@@ -148,7 +148,7 @@ class ExecResult(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
-# Tools (П1: registry with risk classes)
+# Tools (registry with risk classes)
 # --------------------------------------------------------------------------------------
 
 
@@ -171,7 +171,7 @@ class ToolResult(BaseModel):
     meta: QueryMeta | None = None
 
     def render_for_model(self) -> str:
-        """Results are data, not instructions: wrap them in <data> tags (H10)."""
+        """Results are data, not instructions: wrap them in <data> tags."""
         head = f"status={self.status}"
         if self.query_id:
             head += f" query_id={self.query_id}"
@@ -222,7 +222,7 @@ def _render_rows(data: TableData) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------
-# Final answer (D15): the model must answer through this tool (function-calling mode ANY)
+# Final answer: the model must answer through this tool (function-calling mode ANY)
 # --------------------------------------------------------------------------------------
 
 AnswerKind = Literal["answer", "clarification", "refusal", "info"]
@@ -259,7 +259,7 @@ class AnswerSubmission(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
-# Reports (D16) — implemented in retail_analyst.reports
+# Reports — implemented in retail_analyst.reports
 # --------------------------------------------------------------------------------------
 
 
@@ -292,7 +292,7 @@ class PendingDeletion(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
-# Tracing (D18) — implemented in retail_analyst.tracing
+# Tracing — implemented in retail_analyst.tracing
 # --------------------------------------------------------------------------------------
 
 TraceEventType = Literal[

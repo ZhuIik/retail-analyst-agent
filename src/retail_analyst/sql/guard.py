@@ -1,11 +1,11 @@
-"""SQL guard and table scoping (D5, D10, D11, А1, А2).
+"""SQL guard and table scoping.
 
     guard_and_scope(sql, user, settings, schema) -> GuardResult
 
 Pipeline: parse (sqlglot, BigQuery) -> static rules -> demographics rule (k-anonymity) ->
 foreign-literal check -> scoping rewrite -> default LIMIT -> self-check of the generated SQL.
 The model proposes, the code
-guarantees (D1): what goes to BigQuery is SQL *regenerated* from the checked AST (comments
+guarantees: what goes to BigQuery is SQL *regenerated* from the checked AST (comments
 dropped), never the model's original text.
 
 Messages go to the model, so they never contain the scoped SQL or the salt.

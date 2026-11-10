@@ -1,4 +1,4 @@
-"""run_sql post-processing: small demographic groups are hidden (k-anonymity, D10). No network."""
+"""run_sql post-processing: small demographic groups are hidden (k-anonymity). No network."""
 
 from __future__ import annotations
 

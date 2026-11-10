@@ -1,7 +1,7 @@
-# Static schema description (П4). This is what the model sees: the *scoped* tables.
-# `exposed: false` columns do not exist in the scoped tables at all (PII, D10) — the model
+# Static schema description. This is what the model sees: the *scoped* tables.
+# `exposed: false` columns do not exist in the scoped tables at all (PII) — the model
 # cannot select them, BigQuery would answer "Unrecognized name".
-# `hashed: true` columns hold salted pseudonyms of customer ids (D10): joins and
+# `hashed: true` columns hold salted pseudonyms of customer ids: joins and
 # COUNT(DISTINCT) work, real ids are never visible.
 # `demographic: true` columns are allowed in aggregates only: a query grouping by them must
 # count distinct customers, and groups below sql.min_group_size are hidden (k-anonymity).

@@ -1,4 +1,4 @@
-"""Fault injection for demos and tests (`--simulate`, D17 / Б1).
+"""Fault injection for demos and tests (`--simulate`).
 
 Each mode raises the exception type the real library raises for that failure, so the real
 classification, retry and fallback code paths run — nothing in the agent knows it is a drill.
@@ -7,7 +7,7 @@ classification, retry and fallback code paths run — nothing in the agent knows
     bq_quota    BigQuery answers 403 quotaExceeded                 -> fatal, honest message
     llm_429     the primary model answers 429 on every call         -> the fallback model answers
     llm_down    every model answers 503                             -> honest "LLM unavailable"
-    empty       BigQuery returns zero rows                          -> empty-result diagnosis (D13)
+    empty       BigQuery returns zero rows                          -> empty-result diagnosis
 """
 
 from __future__ import annotations

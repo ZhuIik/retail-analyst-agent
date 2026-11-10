@@ -228,7 +228,7 @@ def test_execute_returns_json_safe_rows_and_meta(monkeypatch) -> None:
     config = fake.calls[0]["config"]
     assert config.maximum_bytes_billed == 1_000_000_000
     assert config.labels == {"user": "brand_manager_x", "trace_id": "abc123"}
-    assert fake.calls[0]["job_retry"] is None  # job-level retries are ours (D12)
+    assert fake.calls[0]["job_retry"] is None  # job-level retries are ours
 
 
 def test_dry_run_returns_bytes(monkeypatch) -> None:

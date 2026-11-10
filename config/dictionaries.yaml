@@ -1,4 +1,4 @@
-# Small value lists shown to the model (D11): exact spellings for common filters.
+# Small value lists shown to the model: exact spellings for common filters.
 # Long lists (brands, ~2,700 values) are NOT here — the model looks them up with describe_data.
 
 departments: [Men, Women]

@@ -1,4 +1,4 @@
-"""Model factory: tools on every model, fallback only on 429/5xx, error classification (D17)."""
+"""Model factory: tools on every model, fallback only on 429/5xx, error classification."""
 
 from __future__ import annotations
 

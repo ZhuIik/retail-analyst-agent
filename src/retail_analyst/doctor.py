@@ -1,4 +1,4 @@
-"""`analyst-doctor`: check the environment before the first question (H15, section 6).
+"""`analyst-doctor`: check the environment before the first question.
 
 Prints OK / FAIL with a fix hint for each check and exits with code 1 if any check fails.
 Region blocks are recognised for both Gemini and BigQuery (section 6, check 9a).

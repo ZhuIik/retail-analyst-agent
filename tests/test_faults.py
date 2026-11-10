@@ -1,4 +1,4 @@
-"""Fault injection raises the exception types the real libraries raise (D17, Б1)."""
+"""Fault injection raises the exception types the real libraries raise."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""JSONL tracer (D18): PII redaction, truncation, never raises, last_turn."""
+"""JSONL tracer: PII redaction, truncation, never raises, last_turn."""
 
 from __future__ import annotations
 

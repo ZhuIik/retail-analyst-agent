@@ -1,4 +1,4 @@
-"""History trimming before each agent call (H12) and tool definitions for bind_tools."""
+"""History trimming before each agent call and tool definitions for bind_tools."""
 
 from __future__ import annotations
 

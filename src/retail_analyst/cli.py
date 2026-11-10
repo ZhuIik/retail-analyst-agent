@@ -1,10 +1,10 @@
-"""Command-line chat (prototype adapter of the interface-agnostic agent, П3).
+"""Command-line chat (prototype adapter of the interface-agnostic agent).
 
     uv run analyst --user anna
     uv run analyst --user ceo --simulate llm_429,bq_timeout
 
-Commands that work without the LLM (D17): /reports, /trace, /help, /quit.
-While a deletion waits for confirmation, the next input is the confirmation answer (D16):
+Commands that work without the LLM: /reports, /trace, /help, /quit.
+While a deletion waits for confirmation, the next input is the confirmation answer:
 it is passed to the graph as Command(resume=...), and anything but the exact answer cancels.
 """
 

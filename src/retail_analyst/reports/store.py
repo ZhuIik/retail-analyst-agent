@@ -1,4 +1,4 @@
-"""Saved reports library (D16), SQLite in the prototype (Cloud SQL in production).
+"""Saved reports library, SQLite in the prototype (Cloud SQL in production).
 
 Every method takes `owner_id` and filters by it in SQL: the owner filter is added by code,
 never by the model, so no tool argument can reach another user's reports. Deletion is a hard
@@ -127,7 +127,7 @@ class ReportStore:
     def search(self, owner_id: str, text: str | None = None, session_id: str | None = None) -> list[ReportSummary]:
         """Reports of the owner whose title or body contains every word of `text`.
 
-        Matching is deliberately simple (D16): precision does not affect safety, because
+        Matching is deliberately simple: precision does not affect safety, because
         deletion always shows a preview and needs the user's confirmation.
         """
         where = ["owner_id = ?"]
@@ -160,7 +160,7 @@ class ReportStore:
     def delete(self, owner_id: str, report_ids: list[int], trace_id: str) -> int:
         """Permanently delete the owner's reports among `report_ids`; return how many.
 
-        The ids come from the confirmed snapshot (D16); the owner filter is re-applied here so a
+        The ids come from the confirmed snapshot; the owner filter is re-applied here so a
         stale or foreign id can never be deleted. Irreversible by design, hence the strict
         confirmation before this is ever called.
         """

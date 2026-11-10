@@ -1,4 +1,4 @@
-"""Demographics in aggregates only, with a minimum group size (k-anonymity; D10, D11).
+"""Demographics in aggregates only, with a minimum group size (k-anonymity).
 
 Client requirement: city, state, country, age, gender and traffic source are allowed in
 aggregates only, groups below `sql.min_group_size` customers are hidden, pseudonymous ids for

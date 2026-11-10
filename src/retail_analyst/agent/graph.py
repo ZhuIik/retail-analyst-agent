@@ -1,13 +1,13 @@
-"""The agent graph (D22): agent -> tools -> (confirm) -> agent ... -> finalize -> END.
+"""The agent graph: agent -> tools -> (confirm) -> agent ... -> finalize -> END.
 
-One analyst model with tools; every protection is code around it (D1):
-- `agent`    calls the model with the system prompt and a trimmed history (H12), under a hard
+One analyst model with tools; every protection is code around it:
+- `agent`    calls the model with the system prompt and a trimmed history, under a hard
              per-turn call limit; LLM failures end the turn with an honest message.
 - `tools`    runs the model's tool calls through the registry (role filter, argument validation,
              tracing, SQL-fix budget). A tool that needs confirmation sets `pending_deletion`.
-- `confirm`  (D16) pauses on `interrupt()`; only the user's exact answer deletes, and only the
+- `confirm` pauses on `interrupt()`; only the user's exact answer deletes, and only the
              snapshot of ids that was previewed, filtered by owner again in the store.
-- `finalize` turns `submit_answer` (D15) into the user-facing text: formatting, PII net, number check.
+- `finalize` turns `submit_answer` into the user-facing text: formatting, PII net, number check.
 
 Caller contract, once per user message (a "turn"):
 
@@ -17,7 +17,7 @@ Caller contract, once per user message (a "turn"):
 The per-turn counters are reset by the caller in that state update, never by the graph, so a turn
 cannot extend its own budget. The first turn also sets `user` (UserContext.model_dump()) and
 `session_id`. If the result has `__interrupt__` (type `confirm_deletion`), the next user input must
-be sent as `graph.invoke(Command(resume=text), config)` — D16 CLI rule — not as a new turn.
+be sent as `graph.invoke(Command(resume=text), config)` — the CLI rule — not as a new turn.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def tool_definition(name: str, description: str, args_model: type[BaseModel]) ->
 
 
 # --------------------------------------------------------------------------------------
-# History trimming (H12)
+# History trimming
 # --------------------------------------------------------------------------------------
 
 
@@ -236,7 +236,7 @@ def build_graph(
         except AgentError as exc:
             tracer.event("error", source=name, kind=exc.kind.value, detail=exc.detail)
             if exc.kind.is_fatal:
-                raise  # quota / auth / region: the model cannot fix it, the turn ends (D12)
+                raise  # quota / auth / region: the model cannot fix it, the turn ends
             return _error(exc.user_message, exc.kind)
         except Exception as exc:  # a tool bug must not kill the turn; the model can work around it
             tracer.event("error", source=name, kind=ErrorKind.UNKNOWN.value, detail=repr(exc)[:500])
@@ -278,7 +278,7 @@ def build_graph(
                 status=result.status,
                 error_kind=result.error_kind.value if result.error_kind else None,
                 query_id=result.query_id,
-                # What the model was told when a call failed: needed to debug self-correction (D18).
+                # What the model was told when a call failed: needed to debug self-correction.
                 message=result.message[:500] if result.status != "ok" else None,
             )
 
@@ -322,7 +322,7 @@ def build_graph(
         last = state["messages"][-1]
         return "finalize" if isinstance(last, AIMessage) else "agent"  # fatal error: stop the turn
 
-    # ---------------------------------------------------------------- confirm (D16)
+    # ---------------------------------------------------------------- confirm
     def confirm(state: AgentState) -> dict[str, Any]:
         pending = PendingDeletion.model_validate(state["pending_deletion"])
         # The node re-runs from the top on resume: nothing before interrupt() may have side effects.
@@ -355,7 +355,7 @@ def build_graph(
             "pending_deletion": None,
         }
 
-    # ---------------------------------------------------------------- finalize (D15)
+    # ---------------------------------------------------------------- finalize
     def finalize(state: AgentState) -> dict[str, Any]:
         ai = _last_ai(state)
         call = ai.tool_calls[0] if ai.tool_calls else None  # routing guarantees a lone, valid submit_answer
@@ -370,7 +370,7 @@ def build_graph(
             tracer.event("number_check", unverified=unverified, facts=len(answer.facts))
         update: dict[str, Any] = {"final_text": text}
         if call:
-            # Only real answers become "the last answer" that save_report stores (Г1); a stop message
+            # Only real answers become "the last answer" that save_report stores; a stop message
             # (call limit, LLM outage) must not replace it.
             update["last_answer"] = {
                 **answer.model_dump(),

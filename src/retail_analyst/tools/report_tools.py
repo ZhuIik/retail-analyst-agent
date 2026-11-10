@@ -1,4 +1,4 @@
-"""Report tools (D16): save, find and (request to) delete saved reports.
+"""Report tools: save, find and (request to) delete saved reports.
 
 The owner is always `ctx.user.user_id` (from login), never a tool argument. `delete_reports`
 has no side effects: it only resolves the matching reports and asks the graph to confirm
@@ -48,14 +48,14 @@ def _summary_table(reports: list[ReportSummary]) -> TableData:
 
 
 def _save_report(args: SaveReportArgs, ctx: ToolContext) -> ToolOutcome:
-    # Г1: the body is what the user saw, taken from state; the model passes only the title.
+    # The body is what the user saw, taken from state; the model passes only the title.
     body = ctx.state.get("last_answer_text")
     last = ctx.state.get("last_answer") or {}
     if not body:
         return ToolOutcome(ToolResult(status="error", message="There is no answer to save yet."))
     queries = ctx.state.get("queries") or {}
     sql = [queries[q]["sql"] for q in last.get("query_ids", []) if q in queries]
-    # D14: the body was already redacted when shown; the question is the user's raw text.
+    # The body was already redacted when shown; the question is the user's raw text.
     body, _ = redact_pii(body)
     question, _ = redact_pii(last.get("question", ""))
     report = _store(ctx).save(
@@ -82,7 +82,7 @@ def _find_reports(args: FindReportsArgs, ctx: ToolContext) -> ToolOutcome:
 
 
 def _delete_reports(args: DeleteReportsArgs, ctx: ToolContext) -> ToolOutcome:
-    # No side effects here (D16): resolve the owner's matching reports, then let the confirm node
+    # No side effects here: resolve the owner's matching reports, then let the confirm node
     # ask the user. Foreign or unknown ids simply do not match, because the store filters by owner.
     matches = _find(ctx, args.text, args.this_conversation_only)
     if args.report_ids is not None:

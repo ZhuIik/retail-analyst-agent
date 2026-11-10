@@ -1,4 +1,4 @@
-"""Static rules for model-written SQL (D5, D11, А2).
+"""Static rules for model-written SQL.
 
 Every check works on the sqlglot AST (BigQuery dialect), never on the SQL text: comments,
 backticks and letter case cannot hide anything from an AST walk. A failed check raises
@@ -15,14 +15,14 @@ from sqlglot.tokens import TokenType
 from retail_analyst.contracts import ErrorKind
 
 DIALECT = "bigquery"
-SCOPED_PREFIX = "__scoped_"  # reserved for our scoped CTEs (D10)
+SCOPED_PREFIX = "__scoped_"  # reserved for our scoped CTEs
 
 # Built-in BigQuery function namespaces that are safe to call. Any other qualified call
 # (`ds.fn(x)`, `` `project.ds.fn`(x) ``) is a persistent UDF, which can read tables we do
-# not scope — so it is rejected (D10: the scoped CTEs must be the only route to data).
+# not scope — so it is rejected (the scoped CTEs must be the only route to data).
 SAFE_FUNCTION_NAMESPACES = frozenset({"NET", "HLL_COUNT", "KLL_QUANTILES"})
 
-# Statement kinds that must never appear anywhere in the tree (D5). The root-type whitelist
+# Statement kinds that must never appear anywhere in the tree. The root-type whitelist
 # already rejects them at the top; this catches anything sqlglot might nest.
 _WRITE_OR_SCRIPT_NODES: tuple[type[exp.Expression], ...] = (
     exp.Insert, exp.Update, exp.Delete, exp.Merge, exp.Create, exp.Drop, exp.Alter, exp.TruncateTable,
@@ -104,7 +104,7 @@ def _statement_name(node: exp.Expression) -> str:
 
 
 def check_cte_names(root: exp.Expression, base_tables: set[str]) -> None:
-    """A model CTE named like a base table or our scoped CTEs would bypass scoping (D10)."""
+    """A model CTE named like a base table or our scoped CTEs would bypass scoping."""
     for cte in root.find_all(exp.CTE):
         name = cte.alias_or_name.lower()
         if name in base_tables:
@@ -173,7 +173,7 @@ def _table_list(base_tables: set[str]) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# Functions (А2)
+# Functions
 # --------------------------------------------------------------------------------------
 
 
@@ -220,7 +220,7 @@ def check_functions(root: exp.Expression, forbidden_prefixes: list[str]) -> None
 
 
 def check_no_star(root: exp.Expression) -> None:
-    """`SELECT *` over a base table scans every column, and BigQuery bills by columns read (D11).
+    """`SELECT *` over a base table scans every column, and BigQuery bills by columns read.
 
     `SELECT *` over the model's own CTEs or subqueries is allowed: their columns are already
     chosen, so it costs nothing extra. Seen live: the model often ends a CTE chain with
@@ -263,7 +263,7 @@ def personal_columns(schema: dict) -> set[str]:
 
 
 def check_personal_columns(root: exp.Expression, schema: dict) -> None:
-    """Clearer message only: the scoped tables do not contain these columns at all (D10)."""
+    """Clearer message only: the scoped tables do not contain these columns at all."""
     hidden = personal_columns(schema)
     for column in root.find_all(exp.Column):
         if column.name.lower() in hidden:

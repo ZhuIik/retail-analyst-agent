@@ -1,4 +1,4 @@
-"""User-facing answer text and the non-blocking number check (D15).
+"""User-facing answer text and the non-blocking number check.
 
 The model submits structured fields (`submit_answer`); code assembles the text, so the layout
 is consistent, assumptions are always visible and hypotheses can never pass as facts.
@@ -95,7 +95,7 @@ def _is_prose_count(match: re.Match[str]) -> bool:
 def check_numbers(answer: AnswerSubmission, queries: Mapping[str, Mapping[str, Any]]) -> list[str]:
     """Numbers in facts that do not appear (within rounding) in the rows of the cited queries.
 
-    Non-blocking by design (D15): the result goes to the trace only, so false alarms (a number
+    Non-blocking by design: the result goes to the trace only, so false alarms (a number
     the model derived, a period in the text) cost nothing. A fact without citations is checked
     against all queries of the conversation; so is the summary message (seen live: a typo like
     "$24,55.03" in the summary while the fact said $24,555.03).

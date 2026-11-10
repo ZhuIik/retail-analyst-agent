@@ -1,6 +1,6 @@
-"""Output PII regex (D14): a safety net, not the main protection.
+"""Output PII regex: a safety net, not the main protection.
 
-The model never sees real PII (scoped tables have no PII columns, D10). This catches anything
+The model never sees real PII (scoped tables have no PII columns). This catches anything
 that slips through anyway — in answers, saved reports and trace payloads.
 
 Patterns are deliberately conservative: reports are full of large numbers (revenue, order

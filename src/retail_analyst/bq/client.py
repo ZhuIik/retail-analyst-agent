@@ -1,4 +1,4 @@
-"""BigQuery execution layer (D11, D12, D17), extending the assignment's starter BigQueryRunner.
+"""BigQuery execution layer, extending the assignment's starter BigQueryRunner.
 
     class BigQueryClient:
         def __init__(self, settings: Settings, faults: FaultInjector | None = None) -> None
@@ -9,7 +9,7 @@
     def classify_bq_error(exc: BaseException) -> ErrorKind
 
 Every failure leaves this module as a contracts.AgentError with a classified ErrorKind.
-Only TRANSIENT errors are retried, here in code (D12); the library's own job-level retries
+Only TRANSIENT errors are retried, here in code; the library's own job-level retries
 are switched off so that there is exactly one, bounded, retry policy.
 """
 
@@ -116,7 +116,7 @@ class BigQueryClient:
         self._sleep: Callable[[float], None] = time.sleep  # replaced in tests
 
     def dry_run(self, sql: str) -> int:
-        """Validate syntax/types and return the bytes the query would process (free, D11)."""
+        """Validate syntax/types and return the bytes the query would process (free)."""
         config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
         job, _ = self._with_retries(
             lambda: self._client.query(sql, job_config=config, retry=_API_RETRY, job_retry=None), sql
@@ -174,7 +174,7 @@ class BigQueryClient:
     # ----------------------------------------------------------------------------------
 
     def _with_retries(self, call: Callable[[], T], sql: str) -> tuple[T, int]:
-        """Run `call`, retrying only TRANSIENT errors with exponential backoff + jitter (D12, D17).
+        """Run `call`, retrying only TRANSIENT errors with exponential backoff + jitter.
 
         Returns (result, attempts). Anything else — or a transient error once the retry or
         total-wait budget is spent — leaves as AgentError.
@@ -221,7 +221,7 @@ class BigQueryClient:
         return AgentError(kind, user_message, detail)
 
     def _clean(self, text: str, sql: str) -> str:
-        """Never leak the salt or the scoped SQL (the model must not see the rewrite, D10)."""
+        """Never leak the salt or the scoped SQL (the model must not see the rewrite)."""
         if sql:
             text = text.replace(sql, "[query]")
         if self._settings.id_salt:

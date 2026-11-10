@@ -1,10 +1,10 @@
-"""System prompt assembly (D22 context, П4).
+"""System prompt assembly.
 
 Static parts (role, rules, schema, glossary, dialect, dictionaries) come first and are identical
 for every turn, so Gemini's implicit context caching can reuse them; per-user and per-day facts
 come last, and the per-question golden examples (requirement 1) come at the very end, so the
 cached prefix is as long as possible. Bump PROMPT_VERSION on any change: it is written to every
-trace (D18).
+trace.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def build_system_prompt(user: UserContext, ctx: PromptContext, examples: Sequenc
 
 @lru_cache(maxsize=1)
 def _golden_retriever() -> GoldenRetriever | None:
-    """Loaded once per process. A missing or invalid bucket disables examples, never the agent (D17)."""
+    """Loaded once per process. A missing or invalid bucket disables examples, never the agent."""
     settings = get_settings()
     try:
         return GoldenRetriever(load_trios(settings.resolve(settings.golden.path)).trios)
@@ -206,7 +206,7 @@ def make_prompt_fn(ctx: PromptContext, find_examples: ExampleFinder = find_golde
     def prompt(state: dict) -> str:
         try:
             examples = find_examples(state.get("question") or "")
-        except Exception:  # the agent must work without the bucket (D17)
+        except Exception:  # the agent must work without the bucket
             examples = []
         return build_system_prompt(UserContext(**state["user"]), ctx, examples)
 

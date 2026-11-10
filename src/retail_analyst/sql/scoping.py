@@ -1,4 +1,4 @@
-"""Table scoping rewrite — the actual protection for per-user access and PII (D10, А1).
+"""Table scoping rewrite — the actual protection for per-user access and PII.
 
 Every base-table reference in the model's query is replaced by a CTE `__scoped_<table>` that
 contains only (a) rows in the user's access scope, (b) exposed columns, (c) salted hashes
@@ -67,7 +67,7 @@ def build_scoped_ctes(tables: set[str], access: AccessScope, dataset: str, salt:
 
 
 def _exposed_columns(table_spec: dict, salt: str) -> list[exp.Expression]:
-    """Exposed columns from schema.yaml; `hashed` ones become salted pseudonyms (А1)."""
+    """Exposed columns from schema.yaml; `hashed` ones become salted pseudonyms."""
     columns: list[exp.Expression] = []
     for name, spec in table_spec["columns"].items():
         spec = spec or {}

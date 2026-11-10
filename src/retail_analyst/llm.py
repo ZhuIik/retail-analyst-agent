@@ -1,10 +1,10 @@
-"""Gemini model factory with fallbacks and rate limiting (D17, H15).
+"""Gemini model factory with fallbacks and rate limiting.
 
     def build_analyst_model(settings, tools, faults=None, on_event=None) -> Runnable
     def classify_llm_error(exc) -> ErrorKind
     def quota_reset_hint() -> str
 
-Built from LangChain's own pieces (D17): `ChatGoogleGenerativeAI`, a shared
+Built from LangChain's own pieces: `ChatGoogleGenerativeAI`, a shared
 `InMemoryRateLimiter`, `bind_tools` and `with_fallbacks`. What we add is a thin wrapper per
 model that injects faults, reports `llm_call` / `fallback` events and turns errors into a
 classified AgentError — which is also what decides whether the next model is tried.
@@ -14,7 +14,7 @@ Facts about the installed langchain-google-genai 4.x that this module relies on:
   google-genai `ClientError` (code, status, details JSON); 5xx as `GoogleAPIError`, itself a
   google-genai `ServerError`. Network timeouts pass through as raw `httpx` exceptions.
 - `max_retries` is the SDK's *total attempts*: 1 means no SDK retry, so a 429 reaches the
-  fallback immediately instead of backing off on the exhausted model (trap, D17).
+  fallback immediately instead of backing off on the exhausted model (trap).
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from retail_analyst.faults import FaultInjector
 
 OnEvent = Callable[[str, dict], None]
 
-# Another model has its own quota and availability (D17); a bad key or a region block fails the same way.
+# Another model has its own quota and availability; a bad key or a region block fails the same way.
 _FALLBACK_KINDS = {ErrorKind.TRANSIENT, ErrorKind.QUOTA_EXHAUSTED}
 _LOCATION_MARKER = "User location is not supported"  # Gemini answers 400 FAILED_PRECONDITION (section 6, 9a)
 _INVALID_KEY_MARKERS = ("API_KEY_INVALID", "API key not valid")  # Gemini answers 400, not 401, for a bad key
@@ -72,7 +72,7 @@ def build_analyst_model(
     limiter.available_tokens = 1.0  # the limiter starts empty; don't make the first question wait 60/rpm s
     wrapped = []
     for i, name in enumerate(names):
-        # bind_tools on EVERY model before with_fallbacks, or the fallback runs without tools (trap, D17).
+        # bind_tools on EVERY model before with_fallbacks, or the fallback runs without tools (trap).
         bound = _make_chat_model(settings, name, limiter).bind_tools(tools, tool_choice="any")
         next_name = names[i + 1] if i + 1 < len(names) else None
         wrapped.append(_observed(bound, name, next_name, is_primary=i == 0, faults=faults, on_event=on_event))

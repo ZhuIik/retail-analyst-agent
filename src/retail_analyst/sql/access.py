@@ -1,4 +1,4 @@
-"""Explicit refusal for literals outside the user's access scope (D10, former H11/K4).
+"""Explicit refusal for literals outside the user's access scope.
 
 This is a convenience for an honest answer, not protection: the scoped tables already hide
 other brands, so without this check the model would see 0 rows and claim "X had no sales".

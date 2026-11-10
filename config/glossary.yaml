@@ -1,4 +1,4 @@
-# Metric definitions (D2, П4). Business decisions, not code: the team's answer to question 4
+# Metric definitions. Business decisions, not code: the team's answer to question 4
 # changes this file only. The agent must state which definitions it used (assumptions field).
 # Always included in the system prompt; wins over anything the model "knows".
 

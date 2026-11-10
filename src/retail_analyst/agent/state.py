@@ -1,4 +1,4 @@
-"""Graph state. Everything here must be JSON-serialisable (checkpointer, D16)."""
+"""Graph state. Everything here must be JSON-serialisable (checkpointer)."""
 
 from __future__ import annotations
 
@@ -24,5 +24,5 @@ class AgentState(TypedDict, total=False):
     sql_fix_attempts: int  # consecutive fixable SQL errors in the current turn
     pending_deletion: dict[str, Any] | None  # PendingDeletion.model_dump() or None
     last_answer: dict[str, Any] | None  # AnswerSubmission.model_dump() of the last shown answer
-    last_answer_text: str | None  # the exact text shown to the user (saved as the report body, Г1)
+    last_answer_text: str | None  # the exact text shown to the user (saved as the report body)
     final_text: str | None  # output of the finalize node for this turn

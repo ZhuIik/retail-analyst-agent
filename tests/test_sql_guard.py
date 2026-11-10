@@ -1,4 +1,4 @@
-"""SQL guard and table scoping (D5, D10, D11, А1, А2). No network.
+"""SQL guard and table scoping. No network.
 
 Most assertions inspect the re-parsed scoped SQL (AST), not substrings, so they check what
 BigQuery would actually execute.
@@ -305,7 +305,7 @@ def test_empty_query_is_invalid_sql(sql):
 
 
 # --------------------------------------------------------------------------------------
-# SELECT * (cost, D11)
+# SELECT * (cost)
 # --------------------------------------------------------------------------------------
 
 
@@ -336,7 +336,7 @@ def test_select_star_is_rejected(sql):
     ],
 )
 def test_select_star_over_own_cte_or_subquery_is_allowed(sql):
-    # Columns are already chosen inside the CTE/subquery, so the star reads nothing extra (D11).
+    # Columns are already chosen inside the CTE/subquery, so the star reads nothing extra.
     ok(sql)
 
 
@@ -345,7 +345,7 @@ def test_count_star_is_allowed():
 
 
 # --------------------------------------------------------------------------------------
-# Forbidden functions (А2)
+# Forbidden functions
 # --------------------------------------------------------------------------------------
 
 
@@ -451,7 +451,7 @@ def test_rejected_table_inside_subquery_or_cte():
 
 
 # --------------------------------------------------------------------------------------
-# PII (D10)
+# PII
 # --------------------------------------------------------------------------------------
 
 
@@ -502,14 +502,14 @@ def test_customer_ids_are_hashed_in_every_table():
 
 
 def test_cast_of_customer_id_still_yields_pseudonym():
-    # А1: hashing happens at the source, so any expression over user_id sees the hash.
+    # Hashing happens at the source, so any expression over user_id sees the hash.
     tree = ok("SELECT CAST(user_id AS STRING) AS customer FROM order_items")
     assert scoped_refs(tree) == [("__scoped_order_items", "order_items")]
     assert_hashed(ctes(tree)["__scoped_order_items"], "user_id")
 
 
 # --------------------------------------------------------------------------------------
-# Access filter (D10) and foreign-literal refusal
+# Access filter and foreign-literal refusal
 # --------------------------------------------------------------------------------------
 
 
@@ -708,7 +708,7 @@ def test_scoped_sql_reparses_and_only_touches_scoped_data(sql, user):
 
 
 # --------------------------------------------------------------------------------------
-# Demographics in aggregates only (k-anonymity, D10)
+# Demographics in aggregates only (k-anonymity)
 # --------------------------------------------------------------------------------------
 
 K = SETTINGS.sql.min_group_size

@@ -1,4 +1,4 @@
-"""format_answer and the non-blocking number check (D15)."""
+"""format_answer and the non-blocking number check."""
 
 from __future__ import annotations
 

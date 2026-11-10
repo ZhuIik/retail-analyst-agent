@@ -1,4 +1,4 @@
-"""JSONL tracing (D18).
+"""JSONL tracing.
 
     class Tracer:
         def __init__(self, trace_dir: Path, session_id: str, user_id: str) -> None
@@ -8,8 +8,8 @@
         @property trace_id -> str | None
 
 One JSONL file per session (`<trace_dir>/<session_id>.jsonl`); every line has ts, session_id,
-trace_id, user_id, type, payload. String payload values pass the PII regex (D14, D18) and are
-truncated. Production would emit the same events through OpenTelemetry (D18).
+trace_id, user_id, type, payload. String payload values pass the PII regex and are
+truncated. Production would emit the same events through OpenTelemetry.
 """
 
 from __future__ import annotations

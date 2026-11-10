@@ -1,4 +1,4 @@
-"""Tool registry (П1): every capability is one entry with a risk class.
+"""Tool registry: every capability is one entry with a risk class.
 
 The graph never special-cases a tool by name except `submit_answer` (which ends the turn).
 Protection is attached to the risk class: an INTERNAL_WRITE tool cannot change anything

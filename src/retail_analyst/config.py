@@ -88,7 +88,7 @@ def get_settings() -> Settings:
         settings.models.fallbacks = [fallback]
     settings.google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
     settings.gcp_project_id = os.getenv("GCP_PROJECT_ID", "").strip()
-    # Salt for customer-id pseudonyms (D10). A fixed dev default keeps pseudonyms stable
+    # Salt for customer-id pseudonyms. A fixed dev default keeps pseudonyms stable
     # between runs; production would read it from Secret Manager.
     settings.id_salt = os.getenv("ID_SALT", "").strip() or "dev-only-salt"
     return settings

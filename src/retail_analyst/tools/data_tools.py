@@ -1,4 +1,4 @@
-"""Data tools: run_sql and describe_data (D11 pipeline, D13 empty-result diagnosis, D10 k-anonymity).
+"""Data tools: run_sql and describe_data : guard, cost check, execution, empty-result diagnosis, k-anonymity.
 
 run_sql is where the two protection layers meet: the SQL guard (scoping, PII, read-only) and the
 BigQuery client (dry-run cost check, byte cap, retries). describe_data reuses the same path, so
@@ -66,7 +66,7 @@ def _execute(sql: str, purpose: str, ctx: ToolContext) -> ToolOutcome:
         result = bq.execute(guard.scoped_sql, labels=labels)
     except AgentError as e:
         if e.kind.is_fatal:
-            raise  # the graph traces it and ends the turn (D12)
+            raise  # the graph traces it and ends the turn
         trace.event("error", kind=e.kind, message=e.user_message, detail=e.detail)
         return _error(e.kind, e.user_message)
 
@@ -74,7 +74,7 @@ def _execute(sql: str, purpose: str, ctx: ToolContext) -> ToolOutcome:
     meta = result.meta
     columns, rows, hidden = result.data.columns, result.data.rows, 0
     if guard.group_size_column:
-        # k-anonymity (D10): small demographic groups are dropped here, before the result reaches
+        # k-anonymity: small demographic groups are dropped here, before the result reaches
         # state, the preview, saved reports or number checks. Nothing downstream ever sees them.
         rows, hidden = drop_small_groups(columns, rows, guard.group_size_column, settings.sql.min_group_size)
     trace.event("bq_job", query_id=query_id, job_id=meta.job_id, bytes=meta.bytes_processed,
@@ -84,7 +84,7 @@ def _execute(sql: str, purpose: str, ctx: ToolContext) -> ToolOutcome:
     update = {"queries": {query_id: stored}}
 
     if hidden and not rows:
-        # Not an EMPTY_RESULT: the filters are right, so no diagnosis (D13) and no fix attempt.
+        # Not an EMPTY_RESULT: the filters are right, so no diagnosis and no fix attempt.
         return ToolOutcome(
             ToolResult(status="empty", query_id=query_id, message=_all_hidden_message(hidden, settings)), update
         )
@@ -124,7 +124,7 @@ def _all_hidden_message(hidden: int, settings: Settings) -> str:
 
 
 def _empty_hint(ctx: ToolContext) -> str:
-    """D13: zero rows is a diagnosis task, not an answer."""
+    """Zero rows is a diagnosis task, not an answer."""
     hint = "The query returned 0 rows. Before reporting 'none', check the filters: exact values (use describe_data)"
     prompt_ctx = ctx.services.get("prompt_ctx")
     if prompt_ctx and prompt_ctx.data_from:
@@ -142,11 +142,11 @@ def describe_data(args: DescribeDataArgs, ctx: ToolContext) -> ToolOutcome:
     col, table = args.column, _DESCRIBE_TABLE[args.column]
     where = f"{col} IS NOT NULL"
     if args.search:
-        # STRPOS rather than LIKE: a substring search is not a filter on a foreign brand (D10).
+        # STRPOS rather than LIKE: a substring search is not a filter on a foreign brand.
         needle = exp.Literal.string(args.search.lower()).sql("bigquery")
         where += f" AND STRPOS(LOWER({col}), {needle}) > 0"
     # Customer demographics are aggregates only: count distinct customers, so rare values
-    # (fewer than sql.min_group_size customers) are hidden like in any other query (D10).
+    # (fewer than sql.min_group_size customers) are hidden like in any other query.
     count = f"COUNT(DISTINCT id) AS {GROUP_SIZE_COLUMN}" if table == "users" else "COUNT(*) AS n"
     order = GROUP_SIZE_COLUMN if table == "users" else "n"
     sql = f"SELECT {col} AS value, {count} FROM {table} WHERE {where} GROUP BY value ORDER BY {order} DESC LIMIT 30"
