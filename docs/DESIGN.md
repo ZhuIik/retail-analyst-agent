@@ -59,13 +59,15 @@ The system has two parts: the **request path** that answers a question in second
 
 **How a question flows** (numbers match the diagram).
 
-1. The client sends the message with the user's JWT (the client's frontend issues it; its
-   claims carry the user's brands). The load balancer validates the token; `chat-api` takes the
-   user's identity and scope from the claims, never from the conversation. Web clients get
-   progress over Server-Sent Events. Slack must be acknowledged within ~3 seconds, so the Slack
-   adapter acknowledges at once, queues the turn in Cloud Tasks and edits its message as progress
-   arrives (a Cloud Tasks delivery is an HTTP request, so Cloud Run keeps CPU allocated for the
-   whole turn).
+1. The web client sends the message with the user's JWT (issued by the client's frontend; its
+   claims carry the user's role and brands). API Gateway validates the token against the
+   identity provider's public keys (`chat-api` can verify it itself the same way); `chat-api`
+   takes the user's identity and scope from the claims, never from the conversation. Progress is
+   streamed over Server-Sent Events. Slack does not send a JWT: a separate **slack-adapter**
+   verifies Slack's request signature, maps the Slack user to the user in the client's identity
+   provider, acknowledges within Slack's 3-second limit, queues the turn in Cloud Tasks and edits
+   its message as progress arrives (a Cloud Tasks delivery is an HTTP request, so Cloud Run keeps
+   CPU allocated for the whole turn). In Slack, deletion is confirmed with buttons.
 2. The agent calls Gemini on Vertex AI with the prompt and the tools; Gemini answers with tool
    calls.
 3. Every SQL statement the model writes goes to the SQL guard.
@@ -79,8 +81,8 @@ The system has two parts: the **request path** that answers a question in second
 
 **Background processes.** Analysts approve new Question → SQL → Report trios into Cloud Storage;
 an ingestion job validates each one with the same SQL guard the agent uses, dry-runs it, strips
-numbers and conclusions from the report, embeds it and writes the index to Postgres, where
-`chat-api` loads it. The CEO's tone edits go through an automated quality gate and are published
+numerical findings from the report, embeds it and publishes a new index file to Cloud Storage,
+which `chat-api` loads into memory. The CEO's tone edits go through an automated quality gate and are published
 as a new persona version without a redeploy. A nightly evaluation runs the golden test set.
 Traces are exported to BigQuery; failed or corrected answers become candidate trios for the
 analysts, which closes the learning loop (requirements 1 and 4).
@@ -89,15 +91,21 @@ analysts, which closes the learning loop (requirements 1 and 4).
 
 | Data                                                | Store                                   | Notes                                                                                         |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Transactions                                        | BigQuery (`thelook_ecommerce`)        | read-only; per-brand authorized views; aggregation threshold rules on demographics            |
-| Conversations, checkpoints                          | Cloud SQL Postgres                      | LangGraph Postgres checkpointer; retention N days                                             |
-| Saved reports, audit log                            | Cloud SQL Postgres                      | reports private to the author; hard delete; audit keeps who / when / which ids, never content |
+| Transactions                                        | BigQuery (`thelook_ecommerce`)        | read-only; authorized views without PII columns; aggregation threshold rule on the demographic view |
+| Conversations, checkpoints                          | Cloud SQL Postgres                      | LangGraph Postgres checkpointer; deleted after 30 days                                        |
+| Saved reports, audit log                            | Cloud SQL Postgres                      | reports private to the author; hard delete (see below); audit keeps who / when / which ids, never content |
 | User preferences                                    | Cloud SQL Postgres                      | fixed fields + free-text notes (requirement 4)                                                |
 | Persona / tone versions                             | Cloud SQL Postgres                      | versioned; the active version is a pointer (requirement 8)                                    |
-| Golden Bucket trios                                 | Cloud Storage                           | source of truth; the ingestion job writes the index to Postgres (pgvector + BM25), chat-api keeps it in memory      |
+| Golden Bucket trios and index                       | Cloud Storage                           | trios are the source of truth; the ingestion job publishes a versioned index file (BM25 statistics + embeddings) that chat-api loads into memory |
 | Metric glossary, schema descriptions, dialect rules | Git (config files)                      | reviewed changes, regression-tested                                                           |
 | Traces, metrics                                     | OpenTelemetry backend + BigQuery export | PII-redacted, access-restricted, retention-limited                                            |
 | Secrets                                             | Secret Manager                          | API keys, pseudonym salt                                                                      |
+
+**What "hard delete" means here.** A deleted report is removed from the reports table at once
+and cannot be restored through the product. Copies outside the table expire on a schedule: the
+conversation in which the report was written (30 days), database backups and point-in-time
+recovery (7 days). Traces never contain answer or report text. The audit row keeps only who
+deleted which ids and when.
 
 ### 2.2 The agent graph
 
@@ -107,14 +115,17 @@ analysts, which closes the learning loop (requirements 1 and 4).
   tables, metric glossary, SQL dialect rules, today's date and data range, the user's scope,
   and up to two Golden Bucket examples) plus a trimmed history. Function calling runs in mode
   `ANY`: the model cannot reply in free text, it must call a tool, and the final answer is the
-  `submit_answer` tool. A hard limit (6 model calls per question) ends the turn honestly instead
-  of looping.
+  `submit_answer` tool. Two ceilings end a runaway turn with an honest partial answer: 6 model
+  calls and 120 seconds per question. They are emergency limits, not the norm: across 35 traced
+  test questions the median was 2 model calls, and 32 of 35 needed 4 or fewer.
 - **tools** executes the model's tool calls through a registry. Each tool has a risk class
   (section 7): read-only tools run at once; `delete_reports` only finds the reports and records
   them as pending, it has no side effects.
 - **confirm** pauses the graph with LangGraph's `interrupt`. The next user input resumes it; code,
   not the model, compares the answer with the required confirmation. Because the node re-runs
-  from the top on resume, nothing before the `interrupt` has side effects.
+  from the top on resume, nothing before the `interrupt` has side effects. If the user writes a
+  new request instead of confirming, the deletion is cancelled and the request is passed on to
+  the model, so it is answered rather than lost.
 - **finalize** turns the structured answer into text, applies the PII regex, and checks that the
   numbers in the facts appear in the cited query results (non-blocking: mismatches go to the
   trace as a quality metric).
@@ -126,21 +137,24 @@ analysts, which closes the learning loop (requirements 1 and 4).
 | Interface                             | Web chat, Slack/Teams adapters over one `chat-api`                | CLI (`analyst --user …`)                              |
 | Identity                              | JWT from the client's frontend, brands from claims                  | `--user` + `config/users.yaml`                       |
 | Agent graph, tools, `submit_answer` | same                                                                | same                                                     |
-| Data access                           | SQL guard **and** BigQuery authorized views per brand         | SQL guard (the public dataset cannot carry our policies) |
-| k-anonymity                           | BigQuery aggregation threshold rules + guard                        | guard + result suppression (min group 5)                 |
+| Brand scoping                         | SQL guard (database-level option in section 5.2)                    | SQL guard                                                |
+| PII                                   | guard **and** BigQuery views without PII columns                    | guard (the public dataset cannot carry our views)        |
+| k-anonymity                           | guard **and** a BigQuery aggregation threshold rule                 | guard + result suppression (min group 5)                 |
 | Deletion confirmation                 | same                                                                | same                                                     |
 | Numbers in answers                    | placeholders bound to query columns, rendered by code               | model writes numbers; non-blocking number check          |
 | Critic (quality review of reports)    | one extra model call for reports                                    | —                                                       |
 | Golden Bucket                         | hybrid retrieval (BM25 + embeddings), ingestion pipeline            | 10 trios, BM25, same safety validation                   |
 | State                                 | Postgres (checkpoints, reports, preferences, persona)               | in-memory checkpointer, SQLite reports                   |
-| Models                                | Gemini Flash on Vertex AI, fallback chain                           | Gemini 3.5 Flash-Lite on AI Studio, 2 fallbacks          |
+| Models                                | Gemini Flash on Vertex AI, fallback chain                           | Gemini 3.5 Flash-Lite on AI Studio, 2 fallback models    |
 | Tracing                               | OpenTelemetry → backend by data-residency rule; dashboards, alerts | JSONL per session + `/trace`                           |
 | Persona / tone                        | admin page, versions, automated quality gate                        | — (design only)                                         |
 
-**What is simplified and what is not.** Safety is complete in the prototype: it cannot show PII,
-another brand's data or delete without confirmation. Quality controls are reduced (no critic, no
-number placeholders), because they need a paid model budget and an evaluation set; the free tier
-allows ~15 requests per minute.
+**What is simplified and what is not.** The prototype has the full set of code-level safety
+controls: the model's mistakes cannot expose PII or another brand's data, and nothing is deleted
+without confirmation. What only production adds is the database-level layer, which also stops
+deliberately crafted queries (section 5.2, "Known limits"). Quality controls are reduced (no
+critic, no number placeholders), because they need a paid model budget and an evaluation set;
+the free tier allows ~15 requests per minute.
 
 ---
 
@@ -161,7 +175,7 @@ data is in **BigQuery** and the model is **Gemini**. On GCP:
 - **Data stays where it is.** Query results and prompts never leave the provider that already
   holds the data, which simplifies the data-protection story.
 - **The engine enforces privacy.** BigQuery authorized views and aggregation threshold rules
-  give a second, database-level layer for brand scoping and k-anonymity.
+  give a second, database-level layer for PII and k-anonymity (section 5.2).
 
 **The design is portable.** Every component is a container, Postgres, a queue or OpenTelemetry.
 If the platform must be AWS, the same architecture maps as follows:
@@ -188,7 +202,7 @@ model moves too (for example the warehouse to Redshift and the model to Bedrock)
 | Vertex AI Agent Engine       | minimal operations, built-in sessions and memory       | less control over our flow: the confirmation pause, Slack async turns, progress streaming; stronger lock-in. The main alternative. |
 | GKE                          | the company already runs Kubernetes with many services | cluster operations for a single service                                                                                            |
 | Compute Engine VM            | special runtime needs                                  | we would patch, scale and restart it ourselves                                                                                     |
-| Cloud Functions              | short event handlers                                   | 30–60 s streamed turns                                                                                                            |
+| Cloud Run functions          | one handler per event                                  | the agent is a service, not a function: several endpoints (chat, SSE stream, task delivery, health), a shared in-memory Golden index and warm model clients |
 
 The service is **stateless**: instances come and go, so all state is in Postgres.
 
@@ -207,7 +221,8 @@ The service is **stateless**: instances come and go, so all state is in Postgres
   question, and no free tier; the hard guarantees are in code, not in model strength. We would
   route complex questions to Pro if evaluation shows Flash failing on them.
 - **Why Flash-Lite in the prototype:** measured free-tier limits are 15 requests/min and
-  **500/day** for each Flash-Lite model against **20/day** for Flash; a question takes 2–5 calls.
+  **500/day** for each Flash-Lite model against **20/day** for Flash; a question takes 2 calls
+  (median of our traced tests).
   Each fallback model has its **own quota**, so the chain adds capacity, not only availability.
   This mattered in practice: during testing both Flash-Lite models returned
   `503 high demand` at the same time and the third model answered.
@@ -220,7 +235,7 @@ The service is **stateless**: instances come and go, so all state is in Postgres
 | Option                       | Better when                                 | Why not here                                                                                                                                                                                                                                               |
 | ---------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **LangGraph** (chosen) | explicit control of steps, pauses and state | —                                                                                                                                                                                                                                                         |
-| Google ADK                   | GCP-native agents deployed to Agent Engine  | community reports (March 2026) showed tool confirmation not working with persistent sessions ([issue](https://github.com/google/adk-python-community/issues/111)), and deletion confirmation with stored state is a hard requirement. The main alternative. |
+| Google ADK                   | GCP-native agents deployed to Agent Engine  | The main alternative. We need three things that LangGraph gives directly: a pause node whose resume is decided by our code, a Postgres checkpointer that fits a stateless service, and full control of the loop (call limits, history trimming, routing on structured answers). With ADK, confirmation would rely on its tool-confirmation feature, which community reports in March 2026 showed not working with persistent sessions ([issue](https://github.com/google/adk-python-community/issues/111); checked in November 2026). |
 | Plain Gemini SDK + own loop  | a very small agent                          | pause/resume, state persistence and retries would be ours to write and test                                                                                                                                                                                |
 | CrewAI / AutoGen             | several cooperating agents                  | we use one agent (section 1)                                                                                                                                                                                                                               |
 
@@ -243,7 +258,7 @@ a cost guard in the SQL validator, and a checklist-style critic.
 | ---------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | SQL safety       | **sqlglot AST**: parse, check, rewrite, regenerate                 | regex on SQL (bypassed by comments, aliases, case); only a read-only role (blocks writes, not other brands or PII)                                                                                                                                          |
 | State database   | **Postgres**                                                       | Firestore (no maintained LangGraph checkpointer; reports, audit and preferences are relational); BigQuery (analytical, slow single-row writes); Redis (not durable enough for an audit log)                                                                 |
-| Golden retrieval | **in-memory index** (BM25 now, + embeddings in production)         | Postgres pgvector + BM25 at tens of thousands of trios; BigQuery `VECTOR_SEARCH` adds seconds per question; Vertex AI Vector Search is for millions                                                                                                       |
+| Golden retrieval | **in-memory index** loaded from a file in Cloud Storage (BM25 now, + embeddings in production) | a search service (Vertex AI Search) or Postgres with pgvector and full-text search at tens of thousands of trios; BigQuery `VECTOR_SEARCH` adds seconds per question; Vertex AI Vector Search is for millions |
 | Tracing          | **OpenTelemetry**, backend by rule                                 | data must stay in the client's cloud and nobody operates extra services → Cloud Trace/Logging; data must stay and a team can operate it → self-hosted Langfuse (Postgres, ClickHouse, Redis, object storage); SaaS allowed → Langfuse Cloud or LangSmith |
 | Python tooling   | **uv** + `pyproject.toml`, `requirements.txt` exported for pip | —                                                                                                                                                                                                                                                          |
 
@@ -323,22 +338,29 @@ analyst's **approach**, not their conclusions:
     action_item_patterns: [...]
 ```
 
-Old numbers and findings are stale by definition and could be repeated as facts, so the loader
-rejects any digit in a report. Metric definitions live in one place, the glossary; a trio only
-names them. The full format and ten sample trios are in
+Old findings are stale by definition and could be repeated as facts, so the loader rejects
+numerical findings in a report (money, percentages, decimals, large numbers and years), while
+small parameters of the approach such as "90 days" or "top 10" are allowed. Metric definitions
+live in one place, the glossary; a trio only names them. The full format and ten sample trios are in
 [config/golden_trios.yaml](../config/golden_trios.yaml).
 
 **At question time.** Retrieval runs in code before the model call, so it is deterministic and
 costs no model call. The prototype ranks trios with BM25 over question and tags, normalises the
 score to 0–1 and keeps at most two examples above a threshold of 0.15; below it nothing is
 added, so an unrelated question gets no misleading example. Production adds embeddings and fuses
-the two rankings (reciprocal rank fusion). Examples go into the prompt as data, after the rules,
-labelled *"approach only; numbers are not current; re-query everything"*.
+the two rankings (reciprocal rank fusion). A short follow-up (*"and for Diesel?"*) is searched
+together with the previous question, so it finds the same kind of analysis. Examples go into the
+prompt as data, after the rules, labelled *"approach only; numbers are not current; re-query
+everything"*.
 
 **Keeping it up to date.**
 - *Sources of candidates:* analysts write trios; answers that users corrected, rated down or
   re-asked are surfaced from traces; the nightly evaluation adds its failures.
-- *Approval:* a human analyst approves every new trio. The model never adds to the bucket.
+- *Two tiers:* **curated** trios, approved by an analyst in a review queue; and **automatic**
+  trios, added without a human from answers that a user rated up, whose SQL passed the guard and
+  whose question passes the evaluation gate (section 5.6). Automatic trios get a lower retrieval
+  weight and are promoted or removed at the next analyst review. The model itself never writes
+  to the bucket.
 - *Ingestion job:* validates the SQL with the same guard the agent uses (tables, functions, PII,
   demographics), dry-runs it on the current schema, rejects numbers in the report, replaces brand
   literals with placeholders (so an example cannot suggest another brand's name), removes
@@ -358,7 +380,8 @@ the privacy-safe customer count.
 |---|---|---|
 | Seeing another brand's data | Every reference to `orders`, `order_items`, `products`, `users` is rewritten to a scoped version: the user's products, their order items, orders containing them, customers who bought them. Customer metrics are therefore computed from the user's brands only. | `sql/scoping.py` |
 | Reading PII | PII columns (names, email, street address, postal code, coordinates) do not exist in the scoped `users` table. IP addresses are PII as well; they are in the `events` table, which is not accessible. | `config/schema.yaml` |
-| Identifying a customer | Customer ids are salted SHA-256 pseudonyms (`C-3fa9b1c2d4e5`): joins and distinct counts work, the real id is never visible | `sql/scoping.py` |
+| Identifying a customer | Customer ids are salted SHA-256 pseudonyms (`C-3fa9b1c2d4e5`): joins and distinct counts work, the real id is never visible. The salt differs per access scope, so two managers cannot match their customer lists by pseudonym (rotating the salt changes pseudonyms; saved reports keep the old ones). | `sql/scoping.py` |
+| Order-level data from other brands | Order columns that describe the whole basket (`num_of_item`, which counts every brand's items) are removed; item counts come from the user's own order items | `config/schema.yaml` |
 | Small groups revealing people | Demographics (age, gender, city, state, country, traffic source) only in aggregates: a query using them must count distinct customers, and groups below 5 customers (configurable) are removed before the model sees the result | `sql/demographics.py`, `tools/data_tools.py` |
 | Changing data | Read-only credentials; only one `SELECT` passes; DML, DDL, scripting, `EXPORT` and `CALL` are rejected anywhere in the query | `sql/rules.py` |
 | Expensive or external functions | `AI.*`, `ML.*`, `EXTERNAL_*`, user-defined and table functions are rejected; `SELECT *` over tables is rejected (BigQuery bills by columns read) | `sql/rules.py` |
@@ -373,9 +396,22 @@ user's brands. If the model filters on another brand, the guard answers *"You do
 to brand X"* instead of returning an empty result, which the model would report as *"X had no
 sales"*.
 
-**Production adds a second layer** in the database itself: authorized views per brand and
-BigQuery aggregation threshold rules, so a bug in the guard does not become a leak. The guard
-stays, because it gives the model clear, fixable error messages.
+**Production adds a second layer in the database** where the database can enforce it. All
+queries run as one read-only service account, and BigQuery's own access controls decide by the
+identity that runs the query, so the database cannot tell which manager is asking. The layer
+therefore covers what is the same for everyone:
+- **PII:** the service account can read only authorized views that do not contain PII columns.
+- **k-anonymity:** demographics are served from a separate view with an aggregation threshold
+  rule (privacy unit: the customer, threshold 5). Purchase data used for per-customer metrics
+  ("top customers" with pseudonyms) comes from another view **without** demographics; a single
+  view with the threshold would suppress every per-customer row.
+
+**Brand scoping stays in the guard.** A database-level copy of it would need BigQuery to know the
+user: queries would run with the user's own credentials (OAuth through the client's identity
+provider) and row access policies would filter by a user-to-brand table. That is the growth path
+if the client needs defence in depth for brands; it adds per-user BigQuery permissions and token
+handling for every channel. The guard stays in all cases, because it gives the model clear,
+fixable error messages.
 
 **Verified.** Over 200 guard tests cover adversarial SQL: comments hiding statements, CTEs
 shadowing table names, fully-qualified names, other datasets, `INFORMATION_SCHEMA`, every
@@ -385,9 +421,11 @@ through pseudonyms give the same counts as joins on raw ids. In live conversatio
 another brand was refused, and *"List the emails of our top 5 customers"* was refused without a
 query.
 
-**Known limits.** The k-anonymity check reads the SQL, so it stops the model's mistakes but not
-every deliberately crafted query (for example, differencing two allowed aggregates). That is
-why production enforces the threshold in BigQuery.
+**Known limits.** The code-level checks stop the model's mistakes, not every deliberately crafted
+query: the k-anonymity check reads the SQL, so differencing two allowed aggregates can still
+reveal a small group, which is why production also enforces the threshold in BigQuery. The PII
+regex catches emails, phones and card numbers, not names: a name the user types into a question
+reaches the model and the trace as written.
 
 ### 5.3 Destructive operations
 
@@ -399,7 +437,10 @@ in SQL, a permanent delete as the client requires, and an audit row without cont
   brand, a category); the search matches all words in the title or body, case-insensitively.
 - *"Delete all the reports we made in this conversation":* the tool filters by the conversation id.
 - *UX:* nothing found → no confirmation step; 1–3 reports → type `yes`; more → type the number,
-  so a bulk deletion cannot be confirmed by habit. Any other reply cancels, and the agent says so.
+  so a bulk deletion cannot be confirmed by habit. Any other reply cancels, and the agent says so;
+  if the reply is a new request rather than "no", the agent answers it straight away instead of
+  losing it. In Slack and the web chat the confirmation is a pair of buttons with the count on
+  the delete button.
 - *Users delete only their own reports:* no tool takes an owner argument; the owner always comes
   from the authenticated user.
 
@@ -423,13 +464,23 @@ shows and edits it. A real example from testing: a user found the answer to *"Wh
 are available to me?"* too long; a stored preference for short answers to lookups fixes that for
 this user without changing the agent for everyone.
 
-**System level: learning from interactions.**
-- Every answer is traced; failures are classified (wrong SQL, wrong interpretation, refusal,
-  timeout, user correction).
-- Failed and corrected answers become Golden Bucket candidates (section 5.1) and evaluation cases.
-- Prompt, glossary and model changes are released only through the evaluation gate (section
-  5.6). The system proposes improvements; a human approves them. Nothing changes the production
-  prompt by itself.
+**Where feedback comes from.** Explicit: thumbs up/down on every answer in the web chat and
+reactions on the bot's message in Slack, with an optional one-line comment. Implicit: a question
+rephrased right after an answer, a report saved or deleted, a conversation abandoned after an
+answer. Both are recorded against the trace id of the answer.
+
+**System level: the system improves itself, within guard rails.**
+- *Automatically, without a human:*
+  - well-rated answers with verified SQL become automatic Golden Bucket examples (section 5.1),
+    so similar questions are answered the same way next time;
+  - value synonyms are learned from successful lookups: when users say "denim" and the agent
+    finds the category `Jeans` through `describe_data` and the answer is rated up, the mapping
+    is added to a per-scope synonym list that goes into the prompt;
+  - user preferences are proposed from behaviour (above).
+- *With a human, because a mistake would affect everyone:* changes to the system prompt, the
+  metric glossary and the model. Failures are classified from traces (wrong SQL, wrong
+  interpretation, refusal, timeout, user correction); fixes are proposed from them and released
+  only through the evaluation gate (section 5.6).
 
 ### 5.5 Resilience
 
@@ -467,7 +518,9 @@ is complete; analysts review a sample of conversations.
 conversations, report save rate, cancelled confirmations, thumbs up/down, and short sessions
 with executives.
 
-**In the prototype.** About 400 automated tests (no network) prove the guarantees that must not
+**In the prototype.** The Golden Bucket has a `test` split of two trios: enough to show the
+format and the mechanism, not to measure quality; a release gate needs a set of 100–200 cases.
+About 400 automated tests (no network) prove the guarantees that must not
 depend on the model: the SQL guard, scoping and pseudonyms, k-anonymity, error classification,
 retries and fallbacks, and whole-graph scenarios with a scripted model. Live testing found real
 quality issues; each was traced to its cause and fixed:
@@ -538,8 +591,8 @@ dashboards, alerts, a retention period and restricted access.
 | Class | Examples | Who handles it | How |
 |---|---|---|---|
 | Fixable by the model | syntax error, unknown column, a rule violation, another brand's literal, query too expensive, empty result | the model | gets a short, actionable message and rewrites the query; after 3 consecutive failures it is told to stop and answer with what it has |
-| Transient | BigQuery 5xx, timeouts, network errors; Gemini 429 per-minute, 503 overload | code | BigQuery: retry with exponential backoff and jitter (at most 3 retries, 30 s in total; a timed-out job is cancelled so it does not keep billing). Gemini: switch to the next model in the chain at once |
-| Fatal | daily quota exhausted, invalid credentials, region block | code | stop the turn with an honest message (e.g. when the quota resets); no retries, no further model calls |
+| Transient or one model's quota | BigQuery 5xx, timeouts, network errors; Gemini 429 (per-minute or one model's daily quota), 503 overload | code | BigQuery: retry with exponential backoff and jitter (at most 3 retries, 30 s in total; a timed-out job is cancelled so it does not keep billing). Gemini: switch to the next model in the chain at once, since each model has its own quota |
+| Fatal | every model in the chain failed, BigQuery quota exhausted, invalid credentials, region block | code | stop the turn with an honest message (e.g. when the quota resets); no retries, no further model calls |
 
 **Classify by cause, not by HTTP code.** We found this live: when a query exceeds the byte cap,
 BigQuery returns **HTTP 500** with the reason `bytesBilledLimitExceeded`. Classified by code, it
@@ -555,7 +608,8 @@ but an HTML 403 page from BigQuery.
   check the exact filter values (with `describe_data`), the date range of the data and the user's
   scope before saying "none". Groups hidden for privacy are reported as such, so the model does
   not chase a filter error that is not there.
-- *Budgets:* at most 6 model calls per question, including retries and fallbacks; queries above
+- *Budgets:* at most 6 model calls and 120 seconds per question, including retries and
+  fallbacks (an honest partial answer when either is reached); queries above
   500 MB in the dry-run go back to the model; BigQuery rejects anything above 1 GB billed;
   `SELECT *` over tables is rejected; the model sees at most 50 rows per result; older tool
   results in the history are replaced by one-line stubs.
@@ -574,7 +628,10 @@ in free text). This was tested by reality: during development Google returned
 | All models unavailable | honest message with the trace id; `/reports` and `/trace` still work (they need no model) |
 | BigQuery unavailable at start-up | the agent starts without the data range and can still explain the data model |
 | Golden Bucket missing or invalid | the agent works without examples |
-| An unexpected error in the CLI | the user gets a message with the trace id and a fresh conversation; the CLI never crashes |
+| An unexpected error in the CLI | the user gets a message with the trace id and a fresh conversation; the CLI does not crash |
+| *Production:* Postgres unavailable | new conversations still work without history (in-memory state for the turn); saving, deleting and listing reports return "temporarily unavailable"; an open conversation cannot be resumed until it is back |
+| *Production:* Golden index fails to load at start-up | the instance keeps the previous index version, or runs without examples and raises an alert |
+| *Production:* two messages to one conversation at once (e.g. a double send in Slack) | a per-conversation lock (Postgres advisory lock on the thread id) serialises turns; the second message waits or is merged, so the checkpoint is never written by two turns at once |
 
 **Seeing it work.** `analyst --simulate llm_429,bq_timeout` (also `llm_down`, `bq_quota`, `empty`)
 injects failures of the same exception types the real libraries raise, so the real handling
@@ -615,20 +672,45 @@ Tools can also be limited to roles (the registry filters what each user's model 
 
 ## 8. Production operations
 
-**Identity and access.** The client's frontend issues a JWT; the load balancer validates its
-signature, and `chat-api` reads the user's role and brands from its claims. The CEO role sees all
-brands. The SQL guard enforces the scope, and BigQuery enforces it again through authorized views
-per brand and aggregation threshold rules for demographics; the agent's service account is
-read-only.
+**Non-functional requirements.** The client has not given these yet (asked); the design is
+sized for the following assumptions and they change configuration, not the architecture:
 
-**Cost per question** (production model `gemini-3.8-flash`, list prices for November 2026):
+| Requirement | Assumption | What it drives |
+|---|---|---|
+| Users | ~200 executives, ~10 questions each per working day | quotas, cost |
+| Concurrency | up to ~20 conversations at the same time | Cloud Run max instances and concurrency, Postgres connections |
+| Latency | median under 15 s, 95% under 45 s for analytical answers; progress shown while working | Flash rather than Pro; parallel queries; the 120 s turn deadline |
+| Availability | 99.5% in business hours; reports stay browsable when the model is down | managed services, model fallback chain |
+| Data loss | saved reports: RPO 1 hour, RTO 4 hours; open conversations may be lost | Cloud SQL backups and point-in-time recovery |
+| Monthly cost | ~44,000 questions × ≈ $0.02 ≈ **$900 for models** (≈ $1,550 after the January 2027 price change), plus ≈ $300–500 for Cloud Run, Cloud SQL and logging | budget alerts |
+
+**Identity and access.** The client's frontend issues a JWT. API Gateway validates its signature
+against the identity provider's public keys (JWKS); `chat-api` reads the user's role and brands
+from its claims. The CEO role sees all brands; a `persona_admin` role may edit the tone. The SQL
+guard enforces the brand scope; BigQuery enforces PII removal and the k-anonymity threshold
+through views (section 5.2).
+
+**Network and IAM.**
+- Cloud Run reaches Cloud SQL over a private IP (Serverless VPC Access); the database has no
+  public address.
+- A VPC Service Controls perimeter around BigQuery, Vertex AI and Cloud Storage stops data from
+  being copied to projects outside the perimeter, even with stolen credentials.
+- Service accounts with least privilege: `chat-api` (BigQuery data viewer on the views only,
+  BigQuery job user, Vertex AI user, Cloud SQL client, Secret Manager accessor for its own
+  secrets); `golden-ingest` (Cloud Storage read/write on the bucket, BigQuery dry-run only,
+  Vertex AI user for embeddings); `persona-gate` (Cloud SQL client, Vertex AI user). No exported
+  keys.
+- Tone changes are audited: who changed it, when, old and new text, and the quality gate result.
+
+**Cost per question** (production model `gemini-3.8-flash`; list prices from the
+[Gemini API pricing page](https://ai.google.dev/gemini-api/docs/pricing), checked in November 2026):
 
 | Item | Typical | Cost |
 |---|---|---|
 | Model input | 3 calls × ~5,000 tokens | 15,000 × $0.75 / 1M ≈ $0.011 |
 | Model output | 3 calls × ~500 tokens | 1,500 × $3.75 / 1M ≈ $0.006 |
 | BigQuery | 2–4 queries × 5–15 MB | ≈ $0.0003 at on-demand pricing |
-| **Total** | | **≈ $0.02 per question** (≈ $0.035 after the announced January 2027 price change) |
+| **Total** | | **≈ $0.02 per question** (≈ $0.035 from January 2027, when the listed prices double) |
 
 Implicit context caching lowers the input cost, because the long static part of the prompt is
 identical across calls and comes first. Reports and the critic add one or two calls.
@@ -640,9 +722,9 @@ cap bound the worst case.
 **Release process.** CI runs the unit tests and the evaluation gate (section 5.6); a new Cloud Run
 revision receives a small share of traffic first (canary) and is promoted if its metrics hold.
 
-**Data retention.** Conversations and traces are kept for a limited period (for example 30–90
-days); traces are PII-redacted and access-restricted; reports stay until their author deletes
-them.
+**Data retention.** Conversations and traces are kept for 30 days, database backups for 7 days;
+traces are PII-redacted, contain no answer text and are access-restricted; reports stay until
+their author deletes them (section 2.1, "What hard delete means here").
 
 ---
 
@@ -663,7 +745,9 @@ The demo users are a brand manager (`anna`, `mark`) and the CEO (`ceo`), defined
   trace. A correct number attached to the wrong label is not caught (section 5.6).
 - No critic: reports are not reviewed by a second model call.
 - k-anonymity is enforced by reading the SQL; deliberate differencing attacks are possible
-  without the database-level rules of the production design.
+  without the database-level rules of the production design. Brand scoping has no database-level
+  layer even in production unless queries run with the user's own credentials (section 5.2).
+- The Golden Bucket test split has two trios: it shows the mechanism, it does not measure quality.
 - Free-tier Flash-Lite models are fast and cheap but weaker at multi-step analysis than Flash;
   free quotas and Google's capacity spikes limit throughput.
 - Conversations live in memory (lost when the CLI exits); saved reports are in a local SQLite file.
