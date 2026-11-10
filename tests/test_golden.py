@@ -73,6 +73,8 @@ VALID = {
     [
         {"report": {"interpretation": "Revenue grew 12% last month", "approach": ["a"]}},  # a stale number
         {"report": {"interpretation": "i", "approach": ["compare with 2024"]}},
+        {"report": {"interpretation": "Texas spent $1,234 less", "approach": ["a"]}},
+        {"report": {"interpretation": "i", "approach": ["average order value was 86.16"]}},
         {"report": {"interpretation": "i", "approach": []}},
         {"split": "train"},
         {"id": "Bad Id"},
@@ -84,6 +86,12 @@ VALID = {
 def test_invalid_trios_are_rejected(change):
     with pytest.raises(ValidationError):
         GoldenBucket.model_validate({"format_version": 1, "trios": [{**VALID, **change}]})
+
+
+def test_approach_parameters_with_small_numbers_are_allowed():
+    approach = ["churn uses a 90 day window", "show the top 10 products", "compare Q1"]
+    report = {"interpretation": "i", "approach": approach}
+    GoldenBucket.model_validate({"format_version": 1, "trios": [{**VALID, "report": report}]})
 
 
 def test_duplicate_ids_are_rejected():

@@ -6,6 +6,8 @@ BigQuery would actually execute.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import sqlglot
 from sqlglot import exp
@@ -483,7 +485,8 @@ def assert_hashed(select: exp.Select, column: str) -> None:
     assert isinstance(expr, exp.Alias)
     pseudonym = expr.this
     assert "SHA256(CONCAT(" in pseudonym.sql("bigquery").upper()
-    assert SALT in [lit.this for lit in pseudonym.find_all(exp.Literal) if lit.is_string]
+    salts = [lit.this for lit in pseudonym.find_all(exp.Literal) if lit.is_string and lit.this != "C-"]
+    assert len(salts) == 1 and re.fullmatch(r"[0-9a-f]{32}", salts[0])  # the per-scope salt, not the raw one
     assert pseudonym.find(exp.Column).name == column
 
 
@@ -682,11 +685,18 @@ def test_messages_never_contain_salt_or_scoped_sql(sql):
         assert secret not in result.message
 
 
-def test_salt_is_escaped_in_scoped_sql():
-    # The salt contains a quote and a backslash; it must round-trip as one string literal.
-    result = guard("SELECT user_id FROM orders")
-    tree = sqlglot.parse_one(result.scoped_sql, read="bigquery")
-    assert SALT in [lit.this for lit in tree.find_all(exp.Literal) if lit.is_string]
+def _salt_literals(user) -> set[str]:
+    tree = sqlglot.parse_one(guard("SELECT user_id FROM orders", user).scoped_sql, read="bigquery")
+    return {lit.this for lit in tree.find_all(exp.Literal) if lit.is_string and re.fullmatch(r"[0-9a-f]{32}", lit.this)}
+
+
+def test_salt_differs_per_scope_and_raw_salt_never_reaches_sql():
+    # Two managers with different brands must not be able to match customers by pseudonym.
+    anna, ceo = _salt_literals("anna"), _salt_literals("ceo")
+    assert len(anna) == 1 and len(ceo) == 1 and anna != ceo
+    same_scope = make_user("brand", list(reversed(USERS["anna"].access.values)))
+    assert _salt_literals(same_scope) == anna  # same brands in any order -> same pseudonyms
+    assert SALT not in guard("SELECT user_id FROM orders").scoped_sql
 
 
 OK_QUERIES = [

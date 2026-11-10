@@ -23,7 +23,8 @@
 #             growth, averages) computed in SQL; relative dates via CURRENT_DATE() so the query
 #             stays valid; a query grouping or filtering by users.age / gender / city / state /
 #             country / traffic_source selects COUNT(DISTINCT u.id) AS customers (privacy rule).
-#   report:   how the analyst answered, WITHOUT numbers or findings (digits are rejected):
+#   report:   how the analyst answered, WITHOUT findings: money, percentages, decimals and large numbers are rejected;
+#             small approach parameters ("90 days", "top 10", "Q1") are fine:
 #     interpretation:       what the question was taken to mean (period, scope, ambiguity resolved)
 #     approach:             ordered steps (queries and checks)
 #     definitions:          metric names from config/glossary.yaml that were used (names only:

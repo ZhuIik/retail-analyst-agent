@@ -18,6 +18,8 @@ _ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # Examples are inserted into the prompt inside <data> tags; a field containing the tag could
 # close the block early and turn the rest of the example into instructions.
 _DATA_TAG = re.compile(r"</?\s*data\b", re.IGNORECASE)
+# Money, percentages, decimals, thousands and 4+ digit numbers (amounts, counts, years) are findings.
+_NUMERIC_FACT = re.compile(r"[$€£]\s*\d|\d\s*%|\d+\.\d+|\d{1,3}(?:,\d{3})+|\d{4,}")
 
 
 class _Strict(BaseModel):
@@ -38,13 +40,13 @@ class AnalystReport(_Strict):
                 *self.action_item_patterns]  # fmt: skip
 
     @model_validator(mode="after")
-    def _no_numbers(self) -> AnalystReport:
-        # Strict on purpose: any digit in a report is most likely a past result, which would be
-        # stale now and could be repeated by the model as a current fact. Write "last twelve
-        # full months", not "12 months"; the exact window lives in the SQL.
+    def _no_numeric_facts(self) -> AnalystReport:
+        # A report holds the approach, never the findings: a past result (money, a percentage, a
+        # count, a year) would be stale now and could be repeated by the model as a current fact.
+        # Small parameters of the approach stay allowed: "90 days", "top 10", "Q1".
         for text in self.texts():
-            if re.search(r"\d", text):
-                raise ValueError(f"report text must not contain numbers (approach only): {text[:80]!r}")
+            if match := _NUMERIC_FACT.search(text):
+                raise ValueError(f"report must not contain numeric findings ({match.group(0)!r}): {text[:80]!r}")
         return self
 
 

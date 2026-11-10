@@ -11,6 +11,8 @@ names) are emitted as escaped literals / identifiers and cannot inject SQL.
 
 from __future__ import annotations
 
+import hashlib
+
 from sqlglot import exp
 
 from retail_analyst.contracts import AccessScope
@@ -76,6 +78,17 @@ def _exposed_columns(table_spec: dict, salt: str) -> list[exp.Expression]:
         col = exp.column(name)
         columns.append(exp.alias_(pseudonym(col, salt), name) if spec.get("hashed") else col)
     return columns
+
+
+def scope_salt(salt: str, access: AccessScope) -> str:
+    """A salt per access scope, so two managers cannot match their customer lists by pseudonym.
+
+    Users with the same scope share pseudonyms (their reports stay comparable); rotating the
+    base salt changes every pseudonym, so saved reports keep the old ones.
+    """
+    values = "|".join(sorted(v.casefold() for v in access.values))
+    key = "all" if access.is_unrestricted else f"{access.column}:{values}"
+    return hashlib.sha256(f"{salt}|{key}".encode()).hexdigest()[:32]
 
 
 def pseudonym(col: exp.Expression, salt: str) -> exp.Expression:

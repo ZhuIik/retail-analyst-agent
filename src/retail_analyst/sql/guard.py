@@ -22,7 +22,7 @@ from retail_analyst.sql import rules
 from retail_analyst.sql.access import find_foreign_literal, foreign_literal_message
 from retail_analyst.sql.demographics import check_demographics
 from retail_analyst.sql.rules import DIALECT, SCOPED_PREFIX, GuardViolation
-from retail_analyst.sql.scoping import build_scoped_ctes, ensure_limit, prepend_ctes, rewrite_tables
+from retail_analyst.sql.scoping import build_scoped_ctes, ensure_limit, prepend_ctes, rewrite_tables, scope_salt
 
 _SCOPING_FAILED = "The query could not be safely scoped. Simplify it (plain SELECT with joins, subqueries or CTEs)."
 
@@ -49,7 +49,9 @@ def guard_and_scope(sql: str, user: UserContext, settings: Settings, schema: dic
 
     tables_used = sorted({name for _, name in refs})
     try:
-        ctes = build_scoped_ctes(set(tables_used), user.access, settings.dataset, settings.id_salt, schema)
+        ctes = build_scoped_ctes(
+            set(tables_used), user.access, settings.dataset, scope_salt(settings.id_salt, user.access), schema
+        )
         rewrite_tables(refs)
         prepend_ctes(root, ctes)
         ensure_limit(root, settings.sql.default_limit)

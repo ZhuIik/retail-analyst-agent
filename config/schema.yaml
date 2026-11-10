@@ -8,7 +8,7 @@
 
 tables:
   orders:
-    description: One row per customer order. Order-level fields (num_of_item) may include items of other brands; use order_items for money and product metrics.
+    description: One row per customer order that contains at least one of the user's products. Use order_items for money, units and product metrics.
     columns:
       order_id: {type: INTEGER, description: Order id; joins order_items.order_id}
       user_id: {type: STRING, hashed: true, description: "Customer pseudonym, e.g. C-3fa9b1c2d4e5; joins users.id"}
@@ -18,7 +18,7 @@ tables:
       returned_at: {type: TIMESTAMP}
       shipped_at: {type: TIMESTAMP}
       delivered_at: {type: TIMESTAMP}
-      num_of_item: {type: INTEGER, description: Items in the whole order (all brands)}
+      num_of_item: {type: INTEGER, exposed: false}  # counts items of all brands: would reveal other brands' baskets
 
   order_items:
     description: One row per item sold. The main table for revenue, units and product metrics.
