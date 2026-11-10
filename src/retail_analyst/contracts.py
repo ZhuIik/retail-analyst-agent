@@ -190,10 +190,35 @@ class ToolResult(BaseModel):
                     "Only the first rows are shown. Do not page through the rest: aggregate, rank or filter "
                     "in SQL so that what you need fits."
                 )
-            lines = [" | ".join(self.data.columns)]
-            lines += [" | ".join("" if v is None else str(v) for v in row) for row in self.data.rows]
-            parts.append("<data>\n" + "\n".join(lines) + "\n</data>")
+            parts.append("<data>\n" + "\n".join(_render_rows(self.data)) + "\n</data>")
         return "\n".join(parts)
+
+
+_WIDE_TABLE_COLUMNS = 4  # wider than this, few-row results are shown as column=value records
+_RECORD_MAX_ROWS = 10
+
+
+def _cell(value: Any) -> str:
+    """Round floats: 0.10703363914373089 next to 0.21790715995841006 invites misreading."""
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _render_rows(data: TableData) -> list[str]:
+    """Few wide rows as `column=value` records, otherwise a `|` table.
+
+    Seen live: in a 10-column KPI row the model reported the return rate as month-over-month
+    growth. Naming every value next to its column removes that kind of slip.
+    """
+    if len(data.columns) > _WIDE_TABLE_COLUMNS and len(data.rows) <= _RECORD_MAX_ROWS:
+        return [
+            f"row {i}: " + ", ".join(f"{c}={_cell(v)}" for c, v in zip(data.columns, row, strict=False))
+            for i, row in enumerate(data.rows, 1)
+        ]
+    return [" | ".join(data.columns), *(" | ".join(_cell(v) for v in row) for row in data.rows)]
 
 
 # --------------------------------------------------------------------------------------

@@ -7,7 +7,7 @@ models:
   # Free-tier limits verified in AI Studio (Nov 2026): flash-lite 15 RPM / 500 RPD each,
   # separate quotas per model -> the fallback adds quota, not just availability (D17).
   analyst: gemini-3.5-flash-lite
-  fallbacks: [gemini-3.1-flash-lite]
+  fallbacks: [gemini-3.1-flash-lite, gemini-3.6-flash]   # last resort: a Flash model (5 RPM / 20 RPD), separate capacity
   temperature: null           # Gemini 3.x uses fixed sampling defaults and ignores temperature
   request_timeout_s: 60
   max_sdk_retries: 1          # keep low so a 429 switches to the fallback instead of waiting

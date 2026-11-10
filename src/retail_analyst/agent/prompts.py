@@ -21,8 +21,9 @@ from retail_analyst.config import CONFIG_DIR, get_settings, load_schema
 from retail_analyst.contracts import UserContext
 from retail_analyst.golden import GoldenMatch, GoldenRetriever, GoldenTrio, load_trios
 
-# v4: golden examples section; v3: metric overrides, demographic aggregates; v2: totals in SQL, short message
-PROMPT_VERSION = "v4"
+# v5: buyers/orders share one status filter (a user saw more buyers than orders in v4);
+# v4: golden examples; v3: metric overrides, demographic aggregates; v2: totals in SQL, short message
+PROMPT_VERSION = "v5"
 
 log = logging.getLogger(__name__)
 

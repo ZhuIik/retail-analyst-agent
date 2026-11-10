@@ -9,7 +9,9 @@ metrics:
   units_sold:
     definition: Count of order_items rows whose status is not 'Cancelled' or 'Returned'.
   orders:
-    definition: Count of distinct order_id containing at least one item in scope.
+    definition: Count of distinct order_id with at least one item that is not 'Cancelled' or 'Returned'.
+  buyers:
+    definition: Count of distinct customers with at least one item that is not 'Cancelled' or 'Returned' (same filter as orders, so buyers can never exceed orders).
   average_order_value:
     definition: Revenue divided by the number of distinct orders with at least one non-cancelled, non-returned item.
   gross_margin:
@@ -30,6 +32,7 @@ metrics:
     definition: Share of customers in the period with two or more orders.
 
 conventions:
+  - Revenue, units, orders, buyers and average order value use the same status filter (exclude 'Cancelled' and 'Returned'); return and cancellation rates are the only metrics that count those statuses. Mixing filters gives impossible results such as more buyers than orders.
   - Dates are order_items.created_at (when the item was ordered) unless the user asks otherwise.
   - The current month is incomplete. Compare full months; if the current month is shown, label it as partial.
   - '"Last month" means the last full calendar month; "this year" means year-to-date.'

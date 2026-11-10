@@ -201,7 +201,8 @@ def build_graph(
             response = model_for(_user(state).role).invoke(prompt)
         except Exception as exc:  # any LLM failure ends the turn honestly (retries/fallbacks live in llm.py)
             kind = exc.kind if isinstance(exc, AgentError) else llm.classify_llm_error(exc)
-            tracer.event("error", source="llm", kind=kind.value, detail=str(exc)[:500])
+            detail = exc.detail if isinstance(exc, AgentError) and exc.detail else str(exc)
+            tracer.event("error", source="llm", kind=kind.value, detail=detail[:500])  # the cause, not the user text
             text = exc.user_message if isinstance(exc, AgentError) else _LLM_FAILURE.get(kind, _LLM_UNAVAILABLE)
             return {"llm_calls": calls + 1, "messages": [AIMessage(content=text)]}
         return {"llm_calls": calls + 1, "messages": [response]}
@@ -277,6 +278,8 @@ def build_graph(
                 status=result.status,
                 error_kind=result.error_kind.value if result.error_kind else None,
                 query_id=result.query_id,
+                # What the model was told when a call failed: needed to debug self-correction (D18).
+                message=result.message[:500] if result.status != "ok" else None,
             )
 
             awaits_confirmation = False

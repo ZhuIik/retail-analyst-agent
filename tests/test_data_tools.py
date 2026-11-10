@@ -132,3 +132,21 @@ def test_describe_data_on_products_is_unchanged():
 def test_drop_small_groups_fails_closed(columns, rows, kept):
     result, hidden = drop_small_groups(columns, rows, "customers", 5)
     assert result == kept and hidden == len(rows) - len(kept)
+
+
+def test_wide_results_are_rendered_as_named_records_with_rounded_floats():
+    from retail_analyst.contracts import TableData, ToolResult
+
+    cols = ["month", "revenue", "orders", "buyers", "return_rate", "revenue_growth_mom"]
+    data = TableData(columns=cols, rows=[["2026-10-01", 24555.0299949646, 285, 284, 0.10703363914373089, 0.2179]])
+    text = ToolResult(status="ok", query_id="q1", data=data, rows_total=1).render_for_model()
+    assert "row 1: month=2026-10-01, revenue=24555.03, orders=285, buyers=284, return_rate=0.107, " in text
+    assert "revenue_growth_mom=0.2179" in text
+
+
+def test_narrow_results_stay_a_table():
+    from retail_analyst.contracts import TableData, ToolResult
+
+    data = TableData(columns=["state", "customers"], rows=[["Texas", 12], ["Ohio", None]])
+    text = ToolResult(status="ok", data=data, rows_total=2).render_for_model()
+    assert "state | customers\nTexas | 12\nOhio | " in text
