@@ -46,7 +46,7 @@ Without uv (Python 3.11–3.13): `python -m venv .venv`, activate it, `pip insta
 **Run**
 ```bash
 uv run analyst --user anna      # brand manager: Calvin Klein, Diesel, Carhartt
-uv run analyst --user mark      # category manager: Jeans, Outerwear & Coats
+uv run analyst --user mark      # brand manager: Levi's, True Religion, Columbia
 uv run analyst --user ceo       # all data
 ```
 `--user` simulates login; users and their data scope are in [config/users.yaml](config/users.yaml).
@@ -130,29 +130,31 @@ running a query. Even if it had tried, the scoped `users` table has no email col
 ## Tests
 
 ```bash
-uv run pytest            # ~285 unit tests, no network or credentials needed
-uv run pytest -m live    # live checks against BigQuery (skipped without credentials)
+uv run pytest -m "not live"   # ~400 tests, no network or credentials needed
+uv run pytest -m live         # live checks against BigQuery (skipped without credentials)
 ```
 The unit tests cover the guarantees that must not depend on the model: the SQL guard against
 adversarial queries (DML, comments, CTE shadowing, forbidden functions, PII columns, other
-tables), scoping and hashing, error classification, retries and fallbacks, and full graph
+tables), scoping and pseudonyms, k-anonymity, the Golden Bucket format, error classification, retries and fallbacks, and full graph
 scenarios with a scripted model, e.g. *no deletion happens without the exact confirmation*.
 
 ## Project layout
 
 ```text
 config/                 everything that changes without code changes
-  users.yaml            users and their data scope (stand-in for SSO + directory groups)
-  schema.yaml           tables the model sees; PII columns removed, customer ids hashed
+  users.yaml            users and their brands (stand-in for the JWT the frontend sends)
+  schema.yaml           tables the model sees; PII removed, ids pseudonymised, demographics marked
   glossary.yaml         metric definitions (revenue, churn, ...)
+  golden_trios.yaml     Golden Bucket: Question -> SQL -> analyst approach (sample set)
   settings.yaml         models, limits, thresholds
 src/retail_analyst/
   cli.py                chat loop, progress lines, confirmation prompt, /reports /trace
   agent/graph.py        LangGraph: agent -> tools -> confirm -> finalize
   agent/prompts.py      system prompt (static part first for implicit caching)
   agent/answer.py       answer formatting and the non-blocking number check
-  sql/                  SQL guard: rules, access check, table scoping rewrite
+  sql/                  SQL guard: rules, access check, scoping rewrite, k-anonymity
   tools/                tool registry (with risk classes), data tools, report tools
+  golden/               Golden Bucket loader and BM25 retriever
   bq/client.py          BigQuery: dry-run, byte cap, error classification, retries
   llm.py                Gemini models, fallback chain, rate limiter
   reports/store.py      saved reports (SQLite), owner filter, permanent delete, audit log
@@ -164,8 +166,9 @@ tests/
 
 ## Configuration notes
 
-- **Models**: `gemini-3.5-flash-lite` with `gemini-3.1-flash-lite` as fallback (free tier:
-  15 requests/min and 500/day each, separate quotas). Override in `.env` with `GEMINI_MODEL`.
+- **Models**: `gemini-3.5-flash-lite`, falling back to `gemini-3.1-flash-lite` and then
+  `gemini-3.6-flash` (separate free-tier quotas: 500/day for each Flash-Lite, 20/day for Flash).
+  Override in `.env` with `GEMINI_MODEL`.
 - **Cost guard**: queries above 500 MB (dry-run) are sent back to the model to narrow;
   BigQuery itself rejects anything above 1 GB billed.
 - Google APIs are not available from some regions; `analyst-doctor` detects this and says so.

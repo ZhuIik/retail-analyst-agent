@@ -12,6 +12,11 @@ This document is the production design; the [prototype](../README.md) implements
 3. [Technology choices](#3-technology-choices)
 4. [Data flow](#4-data-flow)
 5. [Requirements](#5-requirements)
+6. [Error handling and fallbacks](#6-error-handling-and-fallbacks)
+7. [Extensibility](#7-extensibility)
+8. [Production operations](#8-production-operations)
+9. [Setup and example run](#9-setup-and-example-run)
+10. [Limitations and next steps](#10-limitations-and-next-steps)
 
 ---
 
@@ -523,3 +528,152 @@ dashboards, alerts, a retention period and restricted access.
   still present). Passed → published as a new version; failed → the editor sees why.
 - **Versions:** the active tone is a pointer, so rollback is one click. Every answer and saved
   report records the persona version, and quality metrics are tracked per version.
+
+---
+
+## 6. Error handling and fallbacks
+
+**Every error is classified, and the class decides who handles it.**
+
+| Class | Examples | Who handles it | How |
+|---|---|---|---|
+| Fixable by the model | syntax error, unknown column, a rule violation, another brand's literal, query too expensive, empty result | the model | gets a short, actionable message and rewrites the query; after 3 consecutive failures it is told to stop and answer with what it has |
+| Transient | BigQuery 5xx, timeouts, network errors; Gemini 429 per-minute, 503 overload | code | BigQuery: retry with exponential backoff and jitter (at most 3 retries, 30 s in total; a timed-out job is cancelled so it does not keep billing). Gemini: switch to the next model in the chain at once |
+| Fatal | daily quota exhausted, invalid credentials, region block | code | stop the turn with an honest message (e.g. when the quota resets); no retries, no further model calls |
+
+**Classify by cause, not by HTTP code.** We found this live: when a query exceeds the byte cap,
+BigQuery returns **HTTP 500** with the reason `bytesBilledLimitExceeded`. Classified by code, it
+would be retried as a server error, paying for the same expensive query again; classified by
+reason, it goes back to the model as "too expensive, narrow it". Likewise, an invalid Gemini key
+returns 400, not 401, and a region block is a 400 *"User location is not supported"* from Gemini
+but an HTML 403 page from BigQuery.
+
+**Self-correction without inflating costs.**
+- *SQL errors:* the guard catches most before BigQuery is called; BigQuery's dry-run catches the
+  rest for free. The model sees the error and fixes the query, usually in one more call.
+- *Empty results:* zero rows is treated as a diagnosis task, not an answer. The model is told to
+  check the exact filter values (with `describe_data`), the date range of the data and the user's
+  scope before saying "none". Groups hidden for privacy are reported as such, so the model does
+  not chase a filter error that is not there.
+- *Budgets:* at most 6 model calls per question, including retries and fallbacks; queries above
+  500 MB in the dry-run go back to the model; BigQuery rejects anything above 1 GB billed;
+  `SELECT *` over tables is rejected; the model sees at most 50 rows per result; older tool
+  results in the history are replaced by one-line stubs.
+
+**Fallbacks.** The model chain is `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` →
+`gemini-3.6-flash`. Each model has its own free-tier quota, so the chain adds capacity as well as
+availability. The SDK's own retries are switched off, so a 429 moves to the next model instead
+of waiting. Tools are bound to every model in the chain (a fallback without tools would answer
+in free text). This was tested by reality: during development Google returned
+`503 high demand` for both Flash-Lite models at once, and the third model answered.
+
+**Graceful degradation.**
+
+| Failure | Behaviour |
+|---|---|
+| All models unavailable | honest message with the trace id; `/reports` and `/trace` still work (they need no model) |
+| BigQuery unavailable at start-up | the agent starts without the data range and can still explain the data model |
+| Golden Bucket missing or invalid | the agent works without examples |
+| An unexpected error in the CLI | the user gets a message with the trace id and a fresh conversation; the CLI never crashes |
+
+**Seeing it work.** `analyst --simulate llm_429,bq_timeout` (also `llm_down`, `bq_quota`, `empty`)
+injects failures of the same exception types the real libraries raise, so the real handling
+code runs: the trace shows the fallback, the BigQuery retries (`attempts: 3`) and the final
+answer.
+
+**Production adds** a shared rate limiter across instances, per-user daily budgets for questions
+and bytes scanned, a circuit breaker per dependency, Vertex AI regional failover, and the Postgres
+checkpointer, which lets a conversation continue after an instance restarts.
+
+---
+
+## 7. Extensibility
+
+New capabilities are new **tools in a registry**; the graph does not change. Every tool declares
+a **risk class**, and the protection comes with the class:
+
+| Risk class | Example tools | Policy enforced by code |
+|---|---|---|
+| Read | `run_sql`, `describe_data`, `find_reports`, `make_chart` | runs immediately |
+| Changes our data | `delete_reports` | the confirmation node (section 4.2) |
+| Sends data out | `send_report_email`, posting to a channel | confirmation with a preview of exactly what is sent, recipients only from the company domain, audit row |
+| Brings outside data in | `search_web` | results wrapped as untrusted `<data>`; the outgoing query is checked so it cannot carry internal numbers or client names; sources are cited |
+
+Tools can also be limited to roles (the registry filters what each user's model even sees).
+
+- **Charts:** `make_chart(query_id, chart_type)` draws from the stored query result in code; the
+  model only picks the chart type, so it cannot distort the numbers.
+- **Email:** the risk is not a wrong colleague receiving a report but data leaving the company,
+  hence the domain rule and the preview.
+- **Web search for trends:** besides injection through web content, the less obvious risk is the
+  agent putting internal figures into a public search query; the outgoing query is filtered.
+- **New interfaces** (Slack, Teams, web) are adapters over the same `chat-api`.
+- **Growth path:** when tools are built by other teams or shared with other agents, they can be
+  served over MCP (Model Context Protocol) without changing the agent.
+
+---
+
+## 8. Production operations
+
+**Identity and access.** The client's frontend issues a JWT; the load balancer validates its
+signature, and `chat-api` reads the user's role and brands from its claims. The CEO role sees all
+brands. The SQL guard enforces the scope, and BigQuery enforces it again through authorized views
+per brand and aggregation threshold rules for demographics; the agent's service account is
+read-only.
+
+**Cost per question** (production model `gemini-3.8-flash`, list prices for November 2026):
+
+| Item | Typical | Cost |
+|---|---|---|
+| Model input | 3 calls × ~5,000 tokens | 15,000 × $0.75 / 1M ≈ $0.011 |
+| Model output | 3 calls × ~500 tokens | 1,500 × $3.75 / 1M ≈ $0.006 |
+| BigQuery | 2–4 queries × 5–15 MB | ≈ $0.0003 at on-demand pricing |
+| **Total** | | **≈ $0.02 per question** (≈ $0.035 after the announced January 2027 price change) |
+
+Implicit context caching lowers the input cost, because the long static part of the prompt is
+identical across calls and comes first. Reports and the critic add one or two calls.
+
+**Limits and abuse.** Per-user daily budgets (questions, bytes scanned) and a shared rate limiter
+keep one user from exhausting the quota for everyone; the per-question call limit and the byte
+cap bound the worst case.
+
+**Release process.** CI runs the unit tests and the evaluation gate (section 5.6); a new Cloud Run
+revision receives a small share of traffic first (canary) and is promoted if its metrics hold.
+
+**Data retention.** Conversations and traces are kept for a limited period (for example 30–90
+days); traces are PII-redacted and access-restricted; reports stay until their author deletes
+them.
+
+---
+
+## 9. Setup and example run
+
+Setup, configuration and a real example session are in the [README](../README.md):
+`uv sync`, a `.env` with the Gemini key and the GCP project, `gcloud auth application-default
+login`, then `uv run analyst-doctor` to check the environment and `uv run analyst --user anna`.
+The demo users are a brand manager (`anna`, `mark`) and the CEO (`ceo`), defined in
+[config/users.yaml](../config/users.yaml).
+
+---
+
+## 10. Limitations and next steps
+
+**Known limitations of the prototype.**
+- The model writes the numbers in its answers; the number check only flags mismatches in the
+  trace. A correct number attached to the wrong label is not caught (section 5.6).
+- No critic: reports are not reviewed by a second model call.
+- k-anonymity is enforced by reading the SQL; deliberate differencing attacks are possible
+  without the database-level rules of the production design.
+- Free-tier Flash-Lite models are fast and cheap but weaker at multi-step analysis than Flash;
+  free quotas and Google's capacity spikes limit throughput.
+- Conversations live in memory (lost when the CLI exits); saved reports are in a local SQLite file.
+- Golden Bucket retrieval is lexical (BM25) over ten sample trios.
+- English only, by agreement with the client.
+
+**Next steps, in order of value.**
+1. Numbers as placeholders bound to query columns, rendered by code.
+2. A critic call for reports.
+3. An evaluation harness over the Golden Bucket test split, wired into CI.
+4. User preferences with a `/prefs` command.
+5. Postgres checkpointer and report store; the Slack adapter.
+6. Authorized views and aggregation threshold rules in BigQuery; embeddings for retrieval.
