@@ -1,8 +1,9 @@
 """Saved reports library (D16), SQLite in the prototype (Cloud SQL in production).
 
 Every method takes `owner_id` and filters by it in SQL: the owner filter is added by code,
-never by the model, so no tool argument can reach another user's reports. Deletion is soft
-(status + timestamp) and always leaves an audit row.
+never by the model, so no tool argument can reach another user's reports. Deletion is a hard
+delete (the client's rule: no recovery window) and always leaves an audit row with who, when and
+which ids — never the report content.
 """
 
 from __future__ import annotations
@@ -25,11 +26,9 @@ CREATE TABLE IF NOT EXISTS reports (
     question    TEXT NOT NULL,
     sql_json    TEXT NOT NULL,
     session_id  TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active',
-    deleted_at  TEXT
+    created_at  TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS reports_owner ON reports(owner_id, status);
+CREATE INDEX IF NOT EXISTS reports_owner ON reports(owner_id);
 CREATE TABLE IF NOT EXISTS audit_log (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     ts               TEXT NOT NULL,
@@ -41,7 +40,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 _SUMMARY_COLS = "id, title, created_at, session_id"
-_REPORT_COLS = "id, title, created_at, session_id, owner_id, body, question, sql_json, status"
+_REPORT_COLS = "id, title, created_at, session_id, owner_id, body, question, sql_json"
 
 
 def _now() -> str:
@@ -68,7 +67,6 @@ def _report(row: sqlite3.Row) -> Report:
         body=row["body"],
         question=row["question"],
         sql=json.loads(row["sql_json"]),
-        status=row["status"],
     )
 
 
@@ -121,19 +119,18 @@ class ReportStore:
     def list(self, owner_id: str, limit: int = 20) -> list[ReportSummary]:
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT {_SUMMARY_COLS} FROM reports WHERE owner_id = ? AND status = 'active'"
-                " ORDER BY id DESC LIMIT ?",
+                f"SELECT {_SUMMARY_COLS} FROM reports WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
         return [_summary(r) for r in rows]
 
     def search(self, owner_id: str, text: str | None = None, session_id: str | None = None) -> list[ReportSummary]:
-        """Active reports of the owner whose title or body contains every word of `text`.
+        """Reports of the owner whose title or body contains every word of `text`.
 
         Matching is deliberately simple (D16): precision does not affect safety, because
         deletion always shows a preview and needs the user's confirmation.
         """
-        where = ["owner_id = ?", "status = 'active'"]
+        where = ["owner_id = ?"]
         params: list[object] = [owner_id]
         if session_id is not None:
             where.append("session_id = ?")
@@ -149,7 +146,7 @@ class ReportStore:
         return [_summary(r) for r in rows]
 
     def get_many(self, owner_id: str, report_ids: list[int]) -> list[Report]:
-        """The owner's reports among `report_ids` (any status); other owners' ids are ignored."""
+        """The owner's reports among `report_ids`; other owners' ids are ignored."""
         if not report_ids:
             return []
         with self._connect() as conn:
@@ -160,11 +157,12 @@ class ReportStore:
             ).fetchall()
         return [_report(r) for r in rows]
 
-    def soft_delete(self, owner_id: str, report_ids: list[int], trace_id: str) -> int:
-        """Soft-delete the owner's active reports among `report_ids`; return how many.
+    def delete(self, owner_id: str, report_ids: list[int], trace_id: str) -> int:
+        """Permanently delete the owner's reports among `report_ids`; return how many.
 
-        The ids come from the confirmed snapshot (D16); the owner and status filters are
-        re-applied here so a stale or foreign id can never be deleted.
+        The ids come from the confirmed snapshot (D16); the owner filter is re-applied here so a
+        stale or foreign id can never be deleted. Irreversible by design, hence the strict
+        confirmation before this is ever called.
         """
         if not report_ids:
             return 0
@@ -173,20 +171,18 @@ class ReportStore:
             ids = [
                 r["id"]
                 for r in conn.execute(
-                    f"SELECT id FROM reports WHERE owner_id = ? AND status = 'active'"
-                    f" AND id IN ({_placeholders(len(report_ids))})",
+                    f"SELECT id FROM reports WHERE owner_id = ? AND id IN ({_placeholders(len(report_ids))})",
                     [owner_id, *report_ids],
                 )
             ]
             if ids:
                 conn.execute(
-                    f"UPDATE reports SET status = 'deleted', deleted_at = ?"
-                    f" WHERE owner_id = ? AND id IN ({_placeholders(len(ids))})",
-                    [now, owner_id, *ids],
+                    f"DELETE FROM reports WHERE owner_id = ? AND id IN ({_placeholders(len(ids))})",
+                    [owner_id, *ids],
                 )
             conn.execute(
                 "INSERT INTO audit_log (ts, owner_id, action, report_ids_json, trace_id) VALUES (?, ?, ?, ?, ?)",
-                (now, owner_id, "soft_delete", json.dumps(ids), trace_id),
+                (now, owner_id, "delete", json.dumps(ids), trace_id),
             )
         return len(ids)
 

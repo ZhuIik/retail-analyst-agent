@@ -164,7 +164,7 @@ class Session:
         console.print(table)
         answer = payload["required_answer"]
         hint = "yes" if answer == "yes" else f"the number of reports ({answer})"
-        console.print(f"[bold]Type {hint} to delete. Anything else cancels.[/]")
+        console.print(f"[bold]Deletion is permanent. Type {hint} to delete; anything else cancels.[/]")
 
     def _fail(self, message: str, detail: str) -> None:
         self.tracer.event("error", source="cli", detail=detail[:500])

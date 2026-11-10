@@ -165,7 +165,7 @@ def test_delete_confirmed_deletes_only_the_previewed_snapshot(tmp_path):
     assert h.active_ids() == {other, late}
     [audit] = h.store.audit_log("alice")
     assert (audit["report_ids"], audit["trace_id"]) == ([t1, t2], "trace-delete my Texas reports")
-    assert "Deleted 2 of 2" in _reply_to(final, "delete_reports").content
+    assert "Permanently deleted 2 of 2" in _reply_to(final, "delete_reports").content
     assert final["final_text"] == "Deleted 2 reports."
     assert h.tracer.of("confirmation")[0]["deleted"] == 2
     assert len(h.tracer.of("interrupt")) == 1  # traced once, although the confirm node ran twice

@@ -335,9 +335,9 @@ def build_graph(
         deleted = 0
         if confirmed:
             owner = _user(state).user_id
-            deleted = services["reports"].soft_delete(owner, pending.report_ids, state.get("trace_id", ""))
+            deleted = services["reports"].delete(owner, pending.report_ids, state.get("trace_id", ""))
             titles = "; ".join(f"#{r.report_id} '{r.title}'" for r in pending.preview)
-            outcome = f"Deleted {deleted} of {len(pending.report_ids)} report(s): {titles}."
+            outcome = f"Permanently deleted {deleted} of {len(pending.report_ids)} report(s): {titles}."
         else:
             outcome = "User cancelled; nothing was deleted."
         tracer.event(

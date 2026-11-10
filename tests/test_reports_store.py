@@ -1,4 +1,4 @@
-"""ReportStore: owner isolation, search, soft delete with audit."""
+"""ReportStore: owner isolation, search, permanent delete with an audit row."""
 
 from __future__ import annotations
 
@@ -19,12 +19,7 @@ def _save(store: ReportStore, owner: str, title: str, body: str = "text", sessio
 def test_save_and_get_roundtrip(store):
     rid = _save(store, "alice", "Revenue by state", body="Texas leads with 1,234.")
     [report] = store.get_many("alice", [rid])
-    assert (report.title, report.body, report.sql, report.status) == (
-        "Revenue by state",
-        "Texas leads with 1,234.",
-        ["SELECT 1"],
-        "active",
-    )
+    assert (report.title, report.body, report.sql) == ("Revenue by state", "Texas leads with 1,234.", ["SELECT 1"])
     assert report.question == "question?" and report.session_id == "s1" and report.created_at
 
 
@@ -51,27 +46,25 @@ def test_search_is_case_insensitive_all_words_and_session_filter(store):
     assert [r.report_id for r in store.search("alice", "выручка")] == [r4]
 
 
-def test_soft_delete_only_owner_active_reports_and_audits(store):
+def test_delete_is_permanent_owner_only_and_audited_without_content(store):
     a1 = _save(store, "alice", "A1")
     a2 = _save(store, "alice", "A2")
     b1 = _save(store, "bob", "B1")
 
-    assert store.soft_delete("alice", [a1, b1, 999], trace_id="t1") == 1
+    assert store.delete("alice", [a1, b1, 999], trace_id="t1") == 1
     assert [r.report_id for r in store.list("alice")] == [a2]
     assert [r.report_id for r in store.list("bob")] == [b1]  # bob's report untouched
-    [deleted] = store.get_many("alice", [a1])
-    assert deleted.status == "deleted"
+    assert store.get_many("alice", [a1]) == []  # gone for good: no recovery window (client's rule)
     assert store.search("alice", "A1") == []
 
-    # Deleting again is a no-op: only active reports count.
-    assert store.soft_delete("alice", [a1], trace_id="t2") == 0
+    # Deleting again is a no-op.
+    assert store.delete("alice", [a1], trace_id="t2") == 0
     log = store.audit_log("alice")
-    assert [(e["action"], e["report_ids"], e["trace_id"]) for e in log] == [
-        ("soft_delete", [a1], "t1"),
-        ("soft_delete", [], "t2"),
-    ]
+    entries = [(e["action"], e["report_ids"], e["trace_id"]) for e in log]
+    assert entries == [("delete", [a1], "t1"), ("delete", [], "t2")]
+    assert set(log[0]) == {"id", "ts", "owner_id", "action", "report_ids", "trace_id"}  # no titles or bodies kept
     assert store.audit_log("bob") == []
-    assert store.soft_delete("alice", [], trace_id="t3") == 0
+    assert store.delete("alice", [], trace_id="t3") == 0
 
 
 def test_persists_across_instances(tmp_path):
