@@ -6,6 +6,7 @@ This document is the production design; the [prototype](../README.md) implements
 (safety and PII, confirmed deletions, resilience, observability) with the same architecture.
 
 **Contents**
+
 1. [Summary](#1-summary)
 2. [Architecture](#2-architecture)
 3. [Technology choices](#3-technology-choices)
@@ -19,14 +20,14 @@ SQL, reads the results and writes the answer, in a loop of tool calls (ReAct) in
 LangGraph graph. It is never trusted with anything that must not go wrong. The principle used
 throughout is **"the model proposes, the code guarantees"**:
 
-| Must never happen | Enforced by code, not by the prompt |
-|---|---|
-| A user sees another brand's data | Every query is parsed and rewritten so each table contains only the user's brands |
-| PII appears in an answer | Scoped tables have no PII columns; customer ids are salted pseudonyms; demographic groups below 5 customers are suppressed; output regex as a safety net |
-| The database is changed | Read-only credentials; only a single `SELECT` over four allowed tables passes the SQL guard |
-| Reports are deleted without consent | Deletion pauses the graph; only the user's exact confirmation of the previewed list deletes |
-| Costs explode | Dry-run cost check, a hard byte cap per query, a per-question limit of model calls, retries only for transient errors |
-| A failure is invisible | Every step of every answer is traced with a trace id |
+| Must never happen                   | Enforced by code, not by the prompt                                                                                                                      |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A user sees another brand's data    | Every query is parsed and rewritten so each table contains only the user's brands                                                                        |
+| PII appears in an answer            | Scoped tables have no PII columns; customer ids are salted pseudonyms; demographic groups below 5 customers are suppressed; output regex as a safety net |
+| The database is changed             | Read-only credentials; only a single `SELECT` over four allowed tables passes the SQL guard                                                            |
+| Reports are deleted without consent | Deletion pauses the graph; only the user's exact confirmation of the previewed list deletes                                                              |
+| Costs explode                       | Dry-run cost check, a hard byte cap per query, a per-question limit of model calls, retries only for transient errors                                    |
+| A failure is invisible              | Every step of every answer is traced with a trace id                                                                                                     |
 
 The model is free where freedom helps: choosing what to query, exploring hypotheses for "why"
 questions, and writing the narrative. It answers through a structured `submit_answer` tool that
@@ -47,76 +48,10 @@ need data or budget the prototype does not have (section 2.3).
 The system has two parts: the **request path** that answers a question in seconds, and
 **background processes** that keep the knowledge, the persona and the quality checks up to date.
 
-**Request path**
+![Request path: how one question is answered](request-path.png)
 
-```mermaid
-flowchart LR
-    classDef client fill:#E3EEFB,stroke:#3D6FB0,stroke-width:1.5px,color:#13243A
-    classDef entry fill:#EDEDED,stroke:#707070,stroke-width:1.5px,color:#202020
-    classDef app fill:#FFF1D6,stroke:#C7891A,stroke-width:2px,color:#3A2804
-    classDef ai fill:#EEE4FA,stroke:#7448B0,stroke-width:1.5px,color:#26163A
-    classDef store fill:#E2F4E7,stroke:#3B8A55,stroke-width:1.5px,color:#102E1A
-    classDef obs fill:#FBE5E5,stroke:#B04646,stroke-width:1.5px,color:#3A1414
+**How a question flows** (numbers match the diagram).
 
-    WEB(["<b>Web chat</b>"]):::client
-    SLACK(["<b>Slack / Teams</b>"]):::client
-    LB["<b>Load balancer</b><br/><i>validates the JWT</i>"]:::entry
-    TASKS["<b>Cloud Tasks</b><br/><i>queues Slack turns</i>"]:::entry
-
-    subgraph RUN["Cloud Run · chat-api · stateless"]
-        AGENT["<b>LangGraph agent</b><br/><i>plans, queries, answers</i>"]:::app
-        GUARD["<b>SQL guard</b><br/><i>scope · pseudonyms · k-anonymity</i>"]:::app
-    end
-
-    LLM["<b>Vertex AI · Gemini</b><br/><i>Flash + fallback models</i>"]:::ai
-    BQ[("<b>BigQuery</b><br/><i>read-only · per-brand views</i>")]:::store
-    PG[("<b>Postgres</b><br/><i>conversations · reports · audit</i>")]:::store
-    OBS["<b>OpenTelemetry</b><br/><i>traces · metrics · alerts</i>"]:::obs
-
-    WEB -->|"1 · question + JWT"| LB
-    SLACK -->|"1 · question + JWT"| LB
-    LB --> AGENT
-    LB -.->|"Slack: answer later"| TASKS -.-> AGENT
-    AGENT <-->|"2 · prompt, tool calls"| LLM
-    AGENT -->|"3 · model's SQL"| GUARD
-    GUARD -->|"4 · checked, scoped SQL"| BQ
-    AGENT <-->|"5 · state, reports"| PG
-    AGENT -->|"6 · every step"| OBS
-```
-
-**Background processes**
-
-```mermaid
-flowchart LR
-    classDef client fill:#E3EEFB,stroke:#3D6FB0,stroke-width:1.5px,color:#13243A
-    classDef job fill:#FFF8E8,stroke:#C7891A,stroke-width:1.5px,stroke-dasharray:4 3,color:#3A2804
-    classDef app fill:#FFF1D6,stroke:#C7891A,stroke-width:2px,color:#3A2804
-    classDef ai fill:#EEE4FA,stroke:#7448B0,stroke-width:1.5px,color:#26163A
-    classDef store fill:#E2F4E7,stroke:#3B8A55,stroke-width:1.5px,color:#102E1A
-    classDef obs fill:#FBE5E5,stroke:#B04646,stroke-width:1.5px,color:#3A1414
-
-    ANALYST(["<b>Analysts</b><br/><i>approve new trios</i>"]):::client
-    CEO(["<b>CEO / admins</b><br/><i>edit the tone</i>"]):::client
-    GCS[("<b>Cloud Storage</b><br/><i>Golden Bucket trios</i>")]:::store
-    INGEST["<b>Ingestion job</b><br/><i>SQL guard · dry-run · strip numbers · embed</i>"]:::job
-    GATE["<b>Quality gate job</b><br/><i>checks + test questions</i>"]:::job
-    EVAL["<b>Nightly evaluation</b><br/><i>golden test set · regressions</i>"]:::job
-    EMB["<b>Vertex AI</b><br/><i>embeddings</i>"]:::ai
-    PG[("<b>Postgres</b><br/><i>golden index · persona versions<br/>preferences</i>")]:::store
-    AGENT["<b>chat-api</b><br/><i>loads index and active persona</i>"]:::app
-    LOGS[("<b>BigQuery</b><br/><i>trace export · dashboards</i>")]:::obs
-
-    ANALYST --> GCS --> INGEST --> PG
-    INGEST <--> EMB
-    CEO --> GATE -->|"publish version"| PG
-    PG --> AGENT
-    LOGS -->|"failed answers become<br/>candidate trios"| ANALYST
-    EVAL --> LOGS
-```
-
-<sub>Colours: blue — people and clients · grey — entry points · orange — our services (dashed: scheduled or event jobs) · purple — Gemini · green — data stores · red — observability.</sub>
-
-**How a question flows** (numbers match the first diagram).
 1. The client sends the message with the user's JWT (the client's frontend issues it; its
    claims carry the user's brands). The load balancer validates the token; `chat-api` takes the
    user's identity and scope from the claims, never from the conversation. Web clients get
@@ -133,47 +68,33 @@ flowchart LR
    deletion confirmation.
 6. Every step is traced.
 
+![Background processes: keeping knowledge and quality up to date](background-processes.png)
+
+**Background processes.** Analysts approve new Question → SQL → Report trios into Cloud Storage;
+an ingestion job validates each one with the same SQL guard the agent uses, dry-runs it, strips
+numbers and conclusions from the report, embeds it and writes the index to Postgres, where
+`chat-api` loads it. The CEO's tone edits go through an automated quality gate and are published
+as a new persona version without a redeploy. A nightly evaluation runs the golden test set.
+Traces are exported to BigQuery; failed or corrected answers become candidate trios for the
+analysts, which closes the learning loop (requirements 1 and 4).
+
 **Where data lives.**
 
-| Data | Store | Notes |
-|---|---|---|
-| Transactions | BigQuery (`thelook_ecommerce`) | read-only; per-brand authorized views; aggregation threshold rules on demographics |
-| Conversations, checkpoints | Cloud SQL Postgres | LangGraph Postgres checkpointer; retention N days |
-| Saved reports, audit log | Cloud SQL Postgres | reports private to the author; hard delete; audit keeps who / when / which ids, never content |
-| User preferences | Cloud SQL Postgres | fixed fields + free-text notes (requirement 4) |
-| Persona / tone versions | Cloud SQL Postgres | versioned; the active version is a pointer (requirement 8) |
-| Golden Bucket trios | Cloud Storage | source of truth; indexed into memory at start-up, Postgres (pgvector + BM25) as it grows |
-| Metric glossary, schema descriptions, dialect rules | Git (config files) | reviewed changes, regression-tested |
-| Traces, metrics | OpenTelemetry backend + BigQuery export | PII-redacted, access-restricted, retention-limited |
-| Secrets | Secret Manager | API keys, pseudonym salt |
+| Data                                                | Store                                   | Notes                                                                                         |
+| --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Transactions                                        | BigQuery (`thelook_ecommerce`)        | read-only; per-brand authorized views; aggregation threshold rules on demographics            |
+| Conversations, checkpoints                          | Cloud SQL Postgres                      | LangGraph Postgres checkpointer; retention N days                                             |
+| Saved reports, audit log                            | Cloud SQL Postgres                      | reports private to the author; hard delete; audit keeps who / when / which ids, never content |
+| User preferences                                    | Cloud SQL Postgres                      | fixed fields + free-text notes (requirement 4)                                                |
+| Persona / tone versions                             | Cloud SQL Postgres                      | versioned; the active version is a pointer (requirement 8)                                    |
+| Golden Bucket trios                                 | Cloud Storage                           | source of truth; the ingestion job writes the index to Postgres (pgvector + BM25), chat-api keeps it in memory      |
+| Metric glossary, schema descriptions, dialect rules | Git (config files)                      | reviewed changes, regression-tested                                                           |
+| Traces, metrics                                     | OpenTelemetry backend + BigQuery export | PII-redacted, access-restricted, retention-limited                                            |
+| Secrets                                             | Secret Manager                          | API keys, pseudonym salt                                                                      |
 
 ### 2.2 The agent graph
 
-```mermaid
-flowchart TD
-    classDef client fill:#E3EEFB,stroke:#3D6FB0,stroke-width:1.5px,color:#13243A
-    classDef ai fill:#EEE4FA,stroke:#7448B0,stroke-width:2px,color:#26163A
-    classDef app fill:#FFF1D6,stroke:#C7891A,stroke-width:2px,color:#3A2804
-    classDef human fill:#FBE5E5,stroke:#B04646,stroke-width:2px,color:#3A1414
-    classDef out fill:#E2F4E7,stroke:#3B8A55,stroke-width:2px,color:#102E1A
-
-    Q(["<b>User message</b>"]):::client
-    A["<b>agent</b><br/><i>Gemini decides the next step</i>"]:::ai
-    T["<b>tools</b><br/><i>run_sql · describe_data · reports</i>"]:::app
-    C{{"<b>confirm</b><br/><i>graph paused: user must approve</i>"}}:::human
-    F["<b>finalize</b><br/><i>format · PII regex · number check</i>"]:::out
-    R(["<b>Answer</b>"]):::client
-
-    Q --> A
-    A -->|"tool calls"| T
-    T -->|"results"| A
-    T -->|"reports to delete"| C
-    C -->|"'yes': delete · else: cancel"| A
-    A -->|"submit_answer"| F
-    A -.->|"call limit · model down"| F
-    T -.->|"quota · auth · region"| F
-    F --> R
-```
+![Agent graph: the agent's internal loop](agent-graph.png)
 
 - **agent** calls the model with the system prompt (role, rules, schema of the user's scoped
   tables, metric glossary, SQL dialect rules, today's date and data range, the user's scope,
@@ -193,21 +114,21 @@ flowchart TD
 
 ### 2.3 Production and prototype
 
-| Component | Production | Prototype |
-|---|---|---|
-| Interface | Web chat, Slack/Teams adapters over one `chat-api` | CLI (`analyst --user …`) |
-| Identity | JWT from the client's frontend, brands from claims | `--user` + `config/users.yaml` |
-| Agent graph, tools, `submit_answer` | same | same |
-| Data access | SQL guard **and** BigQuery authorized views per brand | SQL guard (the public dataset cannot carry our policies) |
-| k-anonymity | BigQuery aggregation threshold rules + guard | guard + result suppression (min group 5) |
-| Deletion confirmation | same | same |
-| Numbers in answers | placeholders bound to query columns, rendered by code | model writes numbers; non-blocking number check |
-| Critic (quality review of reports) | one extra model call for reports | — |
-| Golden Bucket | hybrid retrieval (BM25 + embeddings), ingestion pipeline | 10 trios, BM25, same safety validation |
-| State | Postgres (checkpoints, reports, preferences, persona) | in-memory checkpointer, SQLite reports |
-| Models | Gemini Flash on Vertex AI, fallback chain | Gemini 3.5 Flash-Lite on AI Studio, 2 fallbacks |
-| Tracing | OpenTelemetry → backend by data-residency rule; dashboards, alerts | JSONL per session + `/trace` |
-| Persona / tone | admin page, versions, automated quality gate | — (design only) |
+| Component                             | Production                                                          | Prototype                                                |
+| ------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------- |
+| Interface                             | Web chat, Slack/Teams adapters over one `chat-api`                | CLI (`analyst --user …`)                              |
+| Identity                              | JWT from the client's frontend, brands from claims                  | `--user` + `config/users.yaml`                       |
+| Agent graph, tools, `submit_answer` | same                                                                | same                                                     |
+| Data access                           | SQL guard **and** BigQuery authorized views per brand         | SQL guard (the public dataset cannot carry our policies) |
+| k-anonymity                           | BigQuery aggregation threshold rules + guard                        | guard + result suppression (min group 5)                 |
+| Deletion confirmation                 | same                                                                | same                                                     |
+| Numbers in answers                    | placeholders bound to query columns, rendered by code               | model writes numbers; non-blocking number check          |
+| Critic (quality review of reports)    | one extra model call for reports                                    | —                                                       |
+| Golden Bucket                         | hybrid retrieval (BM25 + embeddings), ingestion pipeline            | 10 trios, BM25, same safety validation                   |
+| State                                 | Postgres (checkpoints, reports, preferences, persona)               | in-memory checkpointer, SQLite reports                   |
+| Models                                | Gemini Flash on Vertex AI, fallback chain                           | Gemini 3.5 Flash-Lite on AI Studio, 2 fallbacks          |
+| Tracing                               | OpenTelemetry → backend by data-residency rule; dashboards, alerts | JSONL per session + `/trace`                           |
+| Persona / tone                        | admin page, versions, automated quality gate                        | — (design only)                                         |
 
 **What is simplified and what is not.** Safety is complete in the prototype: it cannot show PII,
 another brand's data or delete without confirmation. Quality controls are reduced (no critic, no
@@ -238,40 +159,40 @@ data is in **BigQuery** and the model is **Gemini**. On GCP:
 **The design is portable.** Every component is a container, Postgres, a queue or OpenTelemetry.
 If the platform must be AWS, the same architecture maps as follows:
 
-| Role | GCP (chosen) | AWS equivalent |
-|---|---|---|
-| Stateless agent service | Cloud Run | App Runner or ECS Fargate |
-| Async turns (Slack) | Cloud Tasks | SQS |
-| State database | Cloud SQL for PostgreSQL | RDS / Aurora PostgreSQL |
-| Golden Bucket storage | Cloud Storage | S3 |
-| Scheduled jobs | Cloud Scheduler + Cloud Run jobs | EventBridge Scheduler + ECS tasks / Lambda |
-| Secrets | Secret Manager | Secrets Manager |
-| Tracing and alerts | Cloud Trace / Logging / Monitoring (or Langfuse) | X-Ray / CloudWatch (or Langfuse) |
-| BigQuery and Gemini access | service account (IAM) | Workload Identity Federation from an IAM role |
+| Role                       | GCP (chosen)                                     | AWS equivalent                                |
+| -------------------------- | ------------------------------------------------ | --------------------------------------------- |
+| Stateless agent service    | Cloud Run                                        | App Runner or ECS Fargate                     |
+| Async turns (Slack)        | Cloud Tasks                                      | SQS                                           |
+| State database             | Cloud SQL for PostgreSQL                         | RDS / Aurora PostgreSQL                       |
+| Golden Bucket storage      | Cloud Storage                                    | S3                                            |
+| Scheduled jobs             | Cloud Scheduler + Cloud Run jobs                 | EventBridge Scheduler + ECS tasks / Lambda    |
+| Secrets                    | Secret Manager                                   | Secrets Manager                               |
+| Tracing and alerts         | Cloud Trace / Logging / Monitoring (or Langfuse) | X-Ray / CloudWatch (or Langfuse)              |
+| BigQuery and Gemini access | service account (IAM)                            | Workload Identity Federation from an IAM role |
 
 We would choose AWS if the client's platform team runs everything there and the data or the
 model moves too (for example the warehouse to Redshift and the model to Bedrock).
 
 ### 3.2 Compute: Cloud Run
 
-| Option | Better when | Why not here |
-|---|---|---|
-| **Cloud Run** (chosen) | one service, uneven load, no ops team | — |
-| Vertex AI Agent Engine | minimal operations, built-in sessions and memory | less control over our flow: the confirmation pause, Slack async turns, progress streaming; stronger lock-in. The main alternative. |
-| GKE | the company already runs Kubernetes with many services | cluster operations for a single service |
-| Compute Engine VM | special runtime needs | we would patch, scale and restart it ourselves |
-| Cloud Functions | short event handlers | 30–60 s streamed turns |
+| Option                       | Better when                                            | Why not here                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloud Run** (chosen) | one service, uneven load, no ops team                  | —                                                                                                                                 |
+| Vertex AI Agent Engine       | minimal operations, built-in sessions and memory       | less control over our flow: the confirmation pause, Slack async turns, progress streaming; stronger lock-in. The main alternative. |
+| GKE                          | the company already runs Kubernetes with many services | cluster operations for a single service                                                                                            |
+| Compute Engine VM            | special runtime needs                                  | we would patch, scale and restart it ourselves                                                                                     |
+| Cloud Functions              | short event handlers                                   | 30–60 s streamed turns                                                                                                            |
 
 The service is **stateless**: instances come and go, so all state is in Postgres.
 
 ### 3.3 Models: Gemini
 
-| Use | Production | Prototype |
-|---|---|---|
-| Analyst (every question) | Gemini Flash (`gemini-3.8-flash`) on Vertex AI | `gemini-3.5-flash-lite` on AI Studio |
-| Fallbacks | another Flash version, then Flash-Lite | `gemini-3.1-flash-lite`, then `gemini-3.6-flash` |
-| Critic (reports only) | Flash or Pro, chosen by evaluation | — |
-| Embeddings (Golden Bucket) | Gemini embeddings | — (BM25 only) |
+| Use                        | Production                                       | Prototype                                            |
+| -------------------------- | ------------------------------------------------ | ---------------------------------------------------- |
+| Analyst (every question)   | Gemini Flash (`gemini-3.8-flash`) on Vertex AI | `gemini-3.5-flash-lite` on AI Studio               |
+| Fallbacks                  | another Flash version, then Flash-Lite           | `gemini-3.1-flash-lite`, then `gemini-3.6-flash` |
+| Critic (reports only)      | Flash or Pro, chosen by evaluation               | —                                                   |
+| Embeddings (Golden Bucket) | Gemini embeddings                                | — (BM25 only)                                       |
 
 - **Why Gemini:** the client's preference, and the same cloud as the data (section 3.1). The
   framework is model-agnostic, so a provider change is configuration.
@@ -289,12 +210,12 @@ The service is **stateless**: instances come and go, so all state is in Postgres
 
 ### 3.4 Agent framework: LangGraph
 
-| Option | Better when | Why not here |
-|---|---|---|
-| **LangGraph** (chosen) | explicit control of steps, pauses and state | — |
-| Google ADK | GCP-native agents deployed to Agent Engine | community reports (March 2026) showed tool confirmation not working with persistent sessions ([issue](https://github.com/google/adk-python-community/issues/111)), and deletion confirmation with stored state is a hard requirement. The main alternative. |
-| Plain Gemini SDK + own loop | a very small agent | pause/resume, state persistence and retries would be ours to write and test |
-| CrewAI / AutoGen | several cooperating agents | we use one agent (section 1) |
+| Option                       | Better when                                 | Why not here                                                                                                                                                                                                                                               |
+| ---------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LangGraph** (chosen) | explicit control of steps, pauses and state | —                                                                                                                                                                                                                                                         |
+| Google ADK                   | GCP-native agents deployed to Agent Engine  | community reports (March 2026) showed tool confirmation not working with persistent sessions ([issue](https://github.com/google/adk-python-community/issues/111)), and deletion confirmation with stored state is a hard requirement. The main alternative. |
+| Plain Gemini SDK + own loop  | a very small agent                          | pause/resume, state persistence and retries would be ours to write and test                                                                                                                                                                                |
+| CrewAI / AutoGen             | several cooperating agents                  | we use one agent (section 1)                                                                                                                                                                                                                               |
 
 Why LangGraph: the confirmation is a **graph node** with `interrupt`, so it cannot be skipped;
 pause and state persistence come with a Postgres checkpointer, which fits the stateless Cloud Run
@@ -311,10 +232,10 @@ a cost guard in the SQL validator, and a checklist-style critic.
 
 ### 3.5 Other choices
 
-| Area | Choice | Alternatives and when |
-|---|---|---|
-| SQL safety | **sqlglot AST**: parse, check, rewrite, regenerate | regex on SQL (bypassed by comments, aliases, case); only a read-only role (blocks writes, not other brands or PII) |
-| State database | **Postgres** | Firestore (no maintained LangGraph checkpointer; reports, audit and preferences are relational); BigQuery (analytical, slow single-row writes); Redis (not durable enough for an audit log) |
-| Golden retrieval | **in-memory index** (BM25 now, + embeddings in production) | Postgres pgvector + BM25 at tens of thousands of trios; BigQuery `VECTOR_SEARCH` adds seconds per question; Vertex AI Vector Search is for millions |
-| Tracing | **OpenTelemetry**, backend by rule | data must stay in the client's cloud and nobody operates extra services → Cloud Trace/Logging; data must stay and a team can operate it → self-hosted Langfuse (Postgres, ClickHouse, Redis, object storage); SaaS allowed → Langfuse Cloud or LangSmith |
-| Python tooling | **uv** + `pyproject.toml`, `requirements.txt` exported for pip | — |
+| Area             | Choice                                                                   | Alternatives and when                                                                                                                                                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL safety       | **sqlglot AST**: parse, check, rewrite, regenerate                 | regex on SQL (bypassed by comments, aliases, case); only a read-only role (blocks writes, not other brands or PII)                                                                                                                                          |
+| State database   | **Postgres**                                                       | Firestore (no maintained LangGraph checkpointer; reports, audit and preferences are relational); BigQuery (analytical, slow single-row writes); Redis (not durable enough for an audit log)                                                                 |
+| Golden retrieval | **in-memory index** (BM25 now, + embeddings in production)         | Postgres pgvector + BM25 at tens of thousands of trios; BigQuery `VECTOR_SEARCH` adds seconds per question; Vertex AI Vector Search is for millions                                                                                                       |
+| Tracing          | **OpenTelemetry**, backend by rule                                 | data must stay in the client's cloud and nobody operates extra services → Cloud Trace/Logging; data must stay and a team can operate it → self-hosted Langfuse (Postgres, ClickHouse, Redis, object storage); SaaS allowed → Langfuse Cloud or LangSmith |
+| Python tooling   | **uv** + `pyproject.toml`, `requirements.txt` exported for pip | —                                                                                                                                                                                                                                                          |
