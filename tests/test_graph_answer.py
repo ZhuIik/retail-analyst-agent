@@ -71,3 +71,8 @@ def test_number_check_ignores_small_prose_counts():
 def test_number_check_ignores_quoted_labels():
     fact = Fact(text="The top age group is '25-34' and \"Under 25\" is second.", query_ids=["q1"])
     assert check_numbers(_answer(fact), {"q1": {"rows": [[1]]}}) == []
+
+
+def test_number_check_covers_the_summary_message():
+    answer = AnswerSubmission(kind="answer", message="Revenue was $24,55.03 last month.", facts=[])
+    assert check_numbers(answer, {"q1": {"rows": [[24555.03]]}}) == ["24", "55.03"]

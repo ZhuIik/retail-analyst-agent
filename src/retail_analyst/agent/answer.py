@@ -97,13 +97,17 @@ def check_numbers(answer: AnswerSubmission, queries: Mapping[str, Mapping[str, A
 
     Non-blocking by design (D15): the result goes to the trace only, so false alarms (a number
     the model derived, a period in the text) cost nothing. A fact without citations is checked
-    against all queries of the conversation.
+    against all queries of the conversation; so is the summary message (seen live: a typo like
+    "$24,55.03" in the summary while the fact said $24,555.03).
     """
     unverified: list[str] = []
-    for fact in answer.facts:
-        cited = fact.query_ids or list(queries)
+    texts = [(fact.text, fact.query_ids) for fact in answer.facts]
+    if answer.kind == "answer":
+        texts.append((answer.message, []))
+    for text, query_ids in texts:
+        cited = query_ids or list(queries)
         values = _numeric_values(row for q in cited if q in queries for row in queries[q].get("rows", []))
-        for match in _NUMBER.finditer(_QUOTED.sub(" ", fact.text)):
+        for match in _NUMBER.finditer(_QUOTED.sub(" ", text)):
             if _is_year(match) or _is_prose_count(match):
                 continue
             if not any(abs(v - c) <= tol for c, tol in _candidates(match) for v in values):
