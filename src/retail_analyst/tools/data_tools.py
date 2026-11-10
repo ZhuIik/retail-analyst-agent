@@ -1,4 +1,4 @@
-"""Data tools: run_sql and describe_data : guard, cost check, execution, empty-result diagnosis, k-anonymity.
+"""Data tools run_sql and describe_data: guard, cost check, execution, empty-result diagnosis, k-anonymity.
 
 run_sql is where the two protection layers meet: the SQL guard (scoping, PII, read-only) and the
 BigQuery client (dry-run cost check, byte cap, retries). describe_data reuses the same path, so
