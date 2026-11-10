@@ -1,7 +1,9 @@
-# Prototype stand-in for SSO + corporate directory groups (П2).
-# `access.column` is the access attribute (brand / category / department); null = all products.
-# Brand-level data is thin in this dataset (median brand: ~12 items sold), so the demo uses
-# top brands and a category manager. Changing the access model = editing this file, not code.
+# Prototype stand-in for login: in production the frontend sends a JWT whose claims carry the
+# user's brands, and the agent enforces access from them.
+# Access is by brand (the client's rule); `column: null` means all products (the CEO).
+# The code supports other access columns (category, department) as a config change.
+# Brand-level data is thin in this dataset (median brand: ~12 items sold), so the demo users
+# manage top-selling brands.
 
 users:
   ceo:
@@ -19,8 +21,8 @@ users:
       values: ["Calvin Klein", "Diesel", "Carhartt"]
 
   mark:
-    display_name: Mark (Category Manager)
-    role: category_manager
+    display_name: Mark (Brand Manager)
+    role: brand_manager
     access:
-      column: category
-      values: ["Jeans", "Outerwear & Coats"]
+      column: brand
+      values: ["Levi's", "True Religion", "Columbia"]

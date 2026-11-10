@@ -14,7 +14,7 @@ models:
   requests_per_minute: 14     # client-side rate limiter, just under the 15 RPM free-tier limit
 
 agent:
-  max_llm_calls_per_turn: 8   # hard limit, includes retries and fallback calls
+  max_llm_calls_per_turn: 6   # hard limit incl. retries and fallbacks; the team asked for ~2-5 per question
   max_sql_fix_attempts: 3
   history_messages: 12        # older tool results are summarised before each agent call
 
@@ -27,6 +27,12 @@ sql:
   preview_rows: 50                  # rows shown to the model; full result (up to stored_rows) stays in state
   stored_rows: 500                  # rows kept in state per query
   forbidden_function_prefixes: ["AI.", "ML.", "EXTERNAL_", "VECTOR_SEARCH", "KEYS.", "AEAD."]
+  min_group_size: 5                 # demographic groups with fewer customers are hidden (k-anonymity)
+
+golden:
+  path: config/golden_trios.yaml    # Question -> SQL -> Report trios (the Golden Bucket sample)
+  top_k: 2                          # examples added to the prompt per question
+  min_score: 0.15                   # below this similarity no example is added (avoid misleading ones)
 
 reports:
   db_path: data/reports.sqlite

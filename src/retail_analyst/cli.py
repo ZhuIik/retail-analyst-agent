@@ -64,7 +64,8 @@ class Session:
         self.tracer = Tracer(settings.resolve(settings.tracing.dir), self.session_id, user.user_id)
         self.reports = ReportStore(settings.resolve(settings.reports.db_path))
         bq = BigQueryClient(settings, faults)
-        prompt_ctx = _prompt_context(BigQueryClient(settings))  # no fault injection: keep faults for the demo
+        # A separate client without fault injection: the simulated faults are kept for the demo questions.
+        prompt_ctx = _prompt_context(BigQueryClient(settings), settings.dataset)
         services = {
             "bq": bq,
             "reports": self.reports,
@@ -197,12 +198,12 @@ class Session:
         console.print(table)
 
 
-def _prompt_context(bq: BigQueryClient) -> PromptContext:
+def _prompt_context(bq: BigQueryClient, dataset: str) -> PromptContext:
     """Data range for the prompt; dates are not sensitive, so this one query is not scoped."""
     try:
         res = bq.execute(
             "SELECT CAST(MIN(DATE(created_at)) AS STRING), CAST(MAX(DATE(created_at)) AS STRING) "
-            "FROM `bigquery-public-data.thelook_ecommerce.orders`",
+            f"FROM `{dataset}.orders`",
             labels={"purpose": "startup"},
         )
         lo, hi = res.data.rows[0]

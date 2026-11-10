@@ -1,8 +1,10 @@
 # Static schema description (П4). This is what the model sees: the *scoped* tables.
 # `exposed: false` columns do not exist in the scoped tables at all (PII, D10) — the model
 # cannot select them, BigQuery would answer "Unrecognized name".
-# `hashed: true` columns hold salted hashes of customer ids (D10, А1): joins and
+# `hashed: true` columns hold salted pseudonyms of customer ids (D10): joins and
 # COUNT(DISTINCT) work, real ids are never visible.
+# `demographic: true` columns are allowed in aggregates only: a query grouping by them must
+# count distinct customers, and groups below sql.min_group_size are hidden (k-anonymity).
 
 tables:
   orders:
@@ -50,12 +52,12 @@ tables:
     description: Customers (only those who bought products in the user's scope). Personal data columns are removed.
     columns:
       id: {type: STRING, hashed: true, description: "Customer pseudonym, e.g. C-3fa9b1c2d4e5"}
-      age: {type: INTEGER}
-      gender: {type: STRING, description: M/F}
-      state: {type: STRING}
-      city: {type: STRING, exposed: false}  # with age + gender a quasi-identifier for one customer
-      country: {type: STRING}
-      traffic_source: {type: STRING, description: "Acquisition channel, e.g. Search, Organic, Facebook, Email, Display"}
+      age: {type: INTEGER, demographic: true}
+      gender: {type: STRING, demographic: true, description: M/F}
+      state: {type: STRING, demographic: true}
+      city: {type: STRING, demographic: true}
+      country: {type: STRING, demographic: true}
+      traffic_source: {type: STRING, demographic: true, description: "Acquisition channel, e.g. Search, Organic, Facebook, Email, Display"}
       created_at: {type: TIMESTAMP, description: Customer sign-up time}
       first_name: {type: STRING, exposed: false}
       last_name: {type: STRING, exposed: false}

@@ -26,7 +26,7 @@ class ModelSettings(BaseModel):
 
 
 class AgentSettings(BaseModel):
-    max_llm_calls_per_turn: int = 8
+    max_llm_calls_per_turn: int = 6
     max_sql_fix_attempts: int = 3
     history_messages: int = 12
 
@@ -40,6 +40,13 @@ class SqlSettings(BaseModel):
     preview_rows: int = 20
     stored_rows: int = 500
     forbidden_function_prefixes: list[str] = []
+    min_group_size: int = 5
+
+
+class GoldenSettings(BaseModel):
+    path: str = "config/golden_trios.yaml"
+    top_k: int = 2
+    min_score: float = 0.15
 
 
 class ReportSettings(BaseModel):
@@ -58,6 +65,7 @@ class Settings(BaseModel):
     sql: SqlSettings
     reports: ReportSettings
     tracing: TracingSettings
+    golden: GoldenSettings = GoldenSettings()
     # From .env
     google_api_key: str = ""
     gcp_project_id: str = ""
