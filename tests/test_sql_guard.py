@@ -474,7 +474,7 @@ def test_scoped_users_has_no_personal_columns_and_hashed_id():
     tree = ok("SELECT u.country, COUNT(DISTINCT u.id) AS n FROM users u GROUP BY 1", user="ceo")
     users = ctes(tree)["__scoped_users"]
     names = select_names(users)
-    assert names == ["id", "age", "gender", "state", "country", "traffic_source", "created_at"]
+    assert names == ["id", "age", "gender", "state", "city", "country", "traffic_source", "created_at"]
     assert_hashed(users, "id")
 
 
@@ -542,15 +542,20 @@ def test_orders_and_order_items_are_filtered_through_scoped_products():
     assert sorted(t.name for t in orders_where.find_all(exp.Table)) == ["__scoped_products", "order_items"]
 
 
+CATEGORY_MANAGER = make_user("category", ["Jeans", "Outerwear & Coats"])
+
+
 def test_category_manager_scope():
-    tree = ok("SELECT category, SUM(retail_price) FROM products WHERE category = 'jeans' GROUP BY 1", user="mark")
+    # The client scopes by brand only; other access columns stay a config change (no code change).
+    mark = CATEGORY_MANAGER
+    tree = ok("SELECT category, SUM(retail_price) FROM products WHERE category = 'jeans' GROUP BY 1", user=mark)
     flt = products_filter(tree)
     assert flt.this.name == "category"
     assert [v.this for v in flt.expressions] == ["Jeans", "Outerwear & Coats"]
-    msg = rejected("SELECT name FROM products WHERE category = 'Tops & Tees'", ErrorKind.FOREIGN_BRAND, "mark")
+    msg = rejected("SELECT name FROM products WHERE category = 'Tops & Tees'", ErrorKind.FOREIGN_BRAND, mark)
     assert msg.startswith("You don't have access to category 'Tops & Tees'")
     # Brand is not Mark's access column: any brand literal is fine (filtered by category anyway).
-    ok("SELECT name FROM products WHERE brand = 'Nike'", user="mark")
+    ok("SELECT name FROM products WHERE brand = 'Nike'", user=mark)
 
 
 def test_ceo_is_unrestricted_but_still_hashed_and_pii_free():
