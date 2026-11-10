@@ -16,6 +16,7 @@ models:
 agent:
   max_llm_calls_per_turn: 6   # hard limit incl. retries and fallbacks; the team asked for ~2-5 per question
   max_sql_fix_attempts: 3
+  turn_timeout_s: 120           # wall-clock budget for one question, then an honest partial answer
   history_messages: 12        # older tool results are summarised before each agent call
 
 sql:

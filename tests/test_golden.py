@@ -254,3 +254,18 @@ def test_missing_bucket_file_disables_examples(monkeypatch):
         monkeypatch.undo()
         prompts._golden_retriever.cache_clear()
     assert prompts.find_golden_examples("How did churn change last month?")  # real bucket again
+
+
+def test_short_follow_up_is_retrieved_with_the_previous_question():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from retail_analyst.agent.prompts import _retrieval_query
+
+    first = "Why did our churn rate change last month?"
+    state = {
+        "question": "and for Diesel?",
+        "messages": [HumanMessage(first), AIMessage("..."), HumanMessage("and for Diesel?")],
+    }
+    assert _retrieval_query(state) == f"{first} and for Diesel?"
+    long_q = "Compare revenue of Jeans and Outerwear over the last six months please"
+    assert _retrieval_query({"question": long_q, "messages": [HumanMessage(first), HumanMessage(long_q)]}) == long_q

@@ -22,6 +22,7 @@ be sent as `graph.invoke(Command(resume=text), config)` — the CLI rule — not
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any
@@ -51,6 +52,7 @@ from retail_analyst.safety.pii import redact_pii
 from retail_analyst.tools.registry import ToolContext, ToolOutcome, ToolRegistry, ToolSpec
 
 SUBMIT_ANSWER = "submit_answer"
+_PLAIN_CANCEL = {"", "no", "n", "nope", "cancel", "stop", "abort", "don't", "do not"}
 _SUBMIT_DESCRIPTION = (
     "Give your response to the user: an analysis, a clarifying question, a refusal or information. "
     "Call it alone, after you have the results of all other tool calls. The text is assembled from these fields."
@@ -181,6 +183,14 @@ def build_graph(
     def agent(state: AgentState) -> dict[str, Any]:
         calls = state.get("llm_calls", 0)
         limit = settings.agent.max_llm_calls_per_turn
+        started = state.get("turn_started_at")
+        if started and time.time() - started > settings.agent.turn_timeout_s:
+            # Wall-clock budget for the whole turn (model calls, retries, queries): answer honestly.
+            tracer.event("error", kind="turn_timeout", seconds=int(time.time() - started))
+            done = _turn_query_ids(state["messages"])
+            text = "This is taking longer than it should, so I stopped instead of keeping you waiting."
+            text += f" Queries completed so far: {', '.join(done)}." if done else " Please try again."
+            return {"messages": [AIMessage(content=text)]}
         if calls >= limit:
             # Hard budget: no model call; an honest partial answer goes straight to finalize.
             tracer.event("error", kind="llm_call_limit", llm_calls=calls)
@@ -343,6 +353,11 @@ def build_graph(
             outcome = f"Permanently deleted {deleted} of {len(pending.report_ids)} report(s): {titles}."
         else:
             outcome = "User cancelled; nothing was deleted."
+            text = reply.strip() if isinstance(reply, str) else ""
+            if text and text.casefold().strip(".!") not in _PLAIN_CANCEL:
+                # The user moved on instead of answering (UX): keep their words so the model can
+                # handle them now, rather than losing the new request behind "cancelled".
+                outcome += f' Instead of confirming, the user wrote: "{text}". Respond to that as their new request.'
         tracer.event(
             "confirmation",
             confirmed=confirmed,
@@ -350,10 +365,13 @@ def build_graph(
             report_ids=pending.report_ids,
             deleted=deleted,
         )
-        return {
+        update: dict[str, Any] = {
             "messages": [ToolMessage(content=outcome, tool_call_id=pending.tool_call_id)],
             "pending_deletion": None,
         }
+        if not confirmed and isinstance(reply, str) and reply.strip().casefold().strip(".!") not in _PLAIN_CANCEL:
+            update["question"] = reply.strip()  # what a later "save it" refers to
+        return update
 
     # ---------------------------------------------------------------- finalize
     def finalize(state: AgentState) -> dict[str, Any]:

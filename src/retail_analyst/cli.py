@@ -106,7 +106,8 @@ class Session:
 
     def ask(self, text: str) -> None:
         if self.awaiting:
-            payload: object = Command(resume=text)
+            # The user's thinking time does not count against the turn's deadline.
+            payload: object = Command(resume=text, update={"turn_started_at": time.time()})
             self.awaiting = None
         else:
             trace_id = self.tracer.new_turn()
@@ -119,6 +120,7 @@ class Session:
                 "trace_id": trace_id,
                 "llm_calls": 0,
                 "sql_fix_attempts": 0,
+                "turn_started_at": time.time(),
                 "final_text": None,
             }
             if not self.started:

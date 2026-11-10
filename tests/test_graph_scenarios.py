@@ -365,3 +365,46 @@ def test_bound_tool_definitions_are_accepted_by_gemini_converter(tmp_path):
     assert {"submit_answer", "save_report", "find_reports", "delete_reports", "run_sql"} <= set(decls)
     fact = decls["submit_answer"].parameters.properties["facts"].items
     assert set(fact.properties) == {"text", "query_ids"}  # nested model inlined, no $ref
+
+
+def test_new_request_instead_of_confirmation_is_not_lost(tmp_path):
+    # UX: the user ignores the confirmation and asks something else; nothing is deleted and the
+    # model receives their words, so the new request is answered in the same turn.
+    h = Harness(tmp_path, [call("delete_reports", text="texas"), submit("Revenue was 1,234.5.")])
+    t1 = h.save("Revenue Texas")
+    h.say("delete my Texas reports")
+    final = h.resume("actually, what was revenue in Ohio?")
+    assert h.active_ids() == {t1}
+    reply = _reply_to(final, "delete_reports").content
+    assert "nothing was deleted" in reply and 'the user wrote: "actually, what was revenue in Ohio?"' in reply
+    assert final["question"] == "actually, what was revenue in Ohio?"
+
+
+@pytest.mark.parametrize("reply", ["no", "No.", "cancel", ""])
+def test_plain_cancel_does_not_become_a_new_request(tmp_path, reply):
+    h = Harness(tmp_path, [call("delete_reports", text="texas"), submit("Cancelled.")])
+    h.save("Revenue Texas")
+    h.say("delete my Texas reports")
+    final = h.resume(reply)
+    assert "the user wrote" not in _reply_to(final, "delete_reports").content
+
+
+def test_turn_deadline_stops_without_another_model_call(tmp_path):
+    h = Harness(tmp_path, [call("run_sql", sql="SELECT 1"), submit("never reached")], turn_timeout_s=60)
+    out = h.graph.invoke(
+        {
+            "messages": [HumanMessage("revenue?")],
+            "question": "revenue?",
+            "user": h.user.model_dump(),
+            "session_id": "s1",
+            "trace_id": "t",
+            "llm_calls": 0,
+            "sql_fix_attempts": 0,
+            "final_text": None,
+            "turn_started_at": 1.0,  # long ago
+        },
+        h.config,
+    )
+    assert "taking longer" in out["final_text"]
+    assert len(h.model.received) == 0
+    assert h.tracer.of("error")[0]["kind"] == "turn_timeout"

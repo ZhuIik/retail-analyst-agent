@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     question: str  # the user's message for this turn
     # Query results by id ("q1", ...): {"sql": str, "columns": [...], "rows": [...], "rows_total": int}
     queries: Annotated[dict[str, dict[str, Any]], merge_dicts]
+    turn_started_at: float  # time.time() when the turn (or a resumed confirmation) started
     llm_calls: int  # in the current turn; hard limit from settings
     sql_fix_attempts: int  # consecutive fixable SQL errors in the current turn
     pending_deletion: dict[str, Any] | None  # PendingDeletion.model_dump() or None

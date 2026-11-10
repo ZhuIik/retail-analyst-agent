@@ -196,6 +196,19 @@ def find_golden_examples(question: str) -> list[GoldenMatch]:
 ExampleFinder = Callable[[str], Sequence[GoldenMatch]]
 
 
+def _retrieval_query(state: dict) -> str:
+    """The question, plus the previous one when it is a short follow-up ("and for Diesel?")."""
+    question = state.get("question") or ""
+    if len(question.split()) >= _FOLLOW_UP_WORDS:
+        return question
+    users = [m.content for m in state.get("messages", []) if getattr(m, "type", "") == "human"]
+    previous = [str(text) for text in users if str(text) != question]
+    return f"{previous[-1]} {question}" if previous else question
+
+
+_FOLLOW_UP_WORDS = 8
+
+
 def make_prompt_fn(ctx: PromptContext, find_examples: ExampleFinder = find_golden_examples) -> Callable[[dict], str]:
     """Adapter for build_graph(system_prompt=...): the graph passes the state.
 
@@ -205,7 +218,7 @@ def make_prompt_fn(ctx: PromptContext, find_examples: ExampleFinder = find_golde
 
     def prompt(state: dict) -> str:
         try:
-            examples = find_examples(state.get("question") or "")
+            examples = find_examples(_retrieval_query(state))
         except Exception:  # the agent must work without the bucket
             examples = []
         return build_system_prompt(UserContext(**state["user"]), ctx, examples)
