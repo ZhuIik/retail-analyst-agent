@@ -1,0 +1,222 @@
+-e .
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.16.0
+    # via
+    #   google-genai
+    #   httpx
+    #   httpx2
+    #   langsmith
+certifi==2026.10.23
+    # via
+    #   httpcore
+    #   httpx
+    #   langchain-core
+    #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
+charset-normalizer==3.5.2
+    # via requests
+cryptography==50.0.2
+    # via google-auth
+distro==1.9.0
+    # via
+    #   google-genai
+    #   langsmith
+filetype==1.2.0
+    # via langchain-google-genai
+google-api-core==2.44.0
+    # via
+    #   google-cloud-bigquery
+    #   google-cloud-core
+google-auth==2.62.1
+    # via
+    #   google-api-core
+    #   google-cloud-bigquery
+    #   google-cloud-core
+    #   google-genai
+google-cloud-bigquery==3.47.0
+    # via retail-analyst
+google-cloud-core==2.8.0
+    # via google-cloud-bigquery
+google-crc32c==1.9.0
+    # via google-resumable-media
+google-genai==3.0.0
+    # via langchain-google-genai
+google-resumable-media==2.11.0
+    # via google-cloud-bigquery
+googleapis-common-protos==1.76.0
+    # via
+    #   google-api-core
+    #   grpcio-status
+grpcio==1.85.1
+    # via
+    #   google-api-core
+    #   grpcio-status
+grpcio-status==1.85.1
+    # via google-api-core
+h11==0.16.0
+    # via
+    #   httpcore
+    #   httpcore2
+httpcore==1.0.9
+    # via httpx
+httpcore2==2.16.0 ; sys_platform != 'emscripten'
+    # via httpx2
+httpx==0.28.1
+    # via
+    #   langchain-core
+    #   langgraph-sdk
+httpx2==2.16.0
+    # via
+    #   google-genai
+    #   langsmith
+httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten'
+    # via httpx2
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   httpx2
+    #   requests
+jsonpatch==1.44
+    # via langchain-core
+jsonpointer==3.10
+    # via jsonpatch
+langchain-core==1.7.6
+    # via
+    #   langchain-google-genai
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-sdk
+    #   retail-analyst
+langchain-google-genai==4.4.3
+    # via retail-analyst
+langchain-protocol==0.0.21
+    # via
+    #   langchain-core
+    #   langgraph-sdk
+langgraph==1.2.20
+    # via retail-analyst
+langgraph-checkpoint==4.3.1
+    # via
+    #   langgraph
+    #   langgraph-prebuilt
+langgraph-prebuilt==1.1.1
+    # via langgraph
+langgraph-sdk==0.4.14
+    # via langgraph
+langsmith==0.14.17
+    # via langchain-core
+markdown-it-py==4.2.0
+    # via rich
+mdurl==0.1.2
+    # via markdown-it-py
+opentelemetry-api==1.45.2
+    # via google-api-core
+orjson==3.13.0
+    # via
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.13.0
+    # via langgraph-checkpoint
+packaging==26.3
+    # via
+    #   google-cloud-bigquery
+    #   langchain-core
+    #   langsmith
+proto-plus==1.29.0
+    # via google-api-core
+protobuf==7.36.2
+    # via
+    #   google-api-core
+    #   googleapis-common-protos
+    #   grpcio-status
+    #   proto-plus
+pyasn1==0.6.5
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==3.12 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
+pydantic==2.14.3
+    # via
+    #   google-genai
+    #   langchain-core
+    #   langchain-google-genai
+    #   langgraph
+    #   langsmith
+    #   retail-analyst
+pydantic-core==2.50.4
+    # via pydantic
+pygments==2.21.0
+    # via rich
+python-dateutil==2.9.0.post0
+    # via google-cloud-bigquery
+python-dotenv==1.2.4
+    # via retail-analyst
+pyyaml==6.0.3
+    # via
+    #   langchain-core
+    #   retail-analyst
+requests==2.34.2
+    # via
+    #   google-api-core
+    #   google-auth
+    #   google-cloud-bigquery
+    #   google-genai
+    #   langsmith
+    #   requests-toolbelt
+requests-toolbelt==1.0.0
+    # via langsmith
+rich==15.0.0
+    # via retail-analyst
+six==1.17.0
+    # via python-dateutil
+sniffio==1.3.1
+    # via
+    #   google-genai
+    #   langsmith
+sqlglot==30.30.0
+    # via retail-analyst
+tenacity==9.1.4
+    # via
+    #   google-genai
+    #   langchain-core
+truststore==0.10.5 ; sys_platform != 'emscripten'
+    # via
+    #   httpcore2
+    #   httpx2
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   google-genai
+    #   grpcio
+    #   httpx2
+    #   langchain-core
+    #   langchain-protocol
+    #   langsmith
+    #   opentelemetry-api
+    #   pydantic
+    #   pydantic-core
+    #   typing-inspection
+typing-inspection==0.4.5
+    # via pydantic
+urllib3==2.8.0
+    # via requests
+uuid-utils==0.19.0
+    # via
+    #   langchain-core
+    #   langsmith
+websockets==17.4
+    # via
+    #   google-genai
+    #   langgraph-sdk
+    #   langsmith
+xxhash==4.0.2
+    # via
+    #   langgraph
+    #   langsmith
+zstandard==0.25.0
+    # via langsmith
