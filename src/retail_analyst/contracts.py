@@ -108,6 +108,9 @@ class GuardResult(BaseModel):
                 no forbidden functions, every base table replaced by the user's scoped CTE,
                 customer ids replaced by salted hashes).
     ok=False -> `error_kind` + `message` explain to the model what to fix. `scoped_sql` is None.
+
+    `group_size_column` is set when the query uses customer demographics: the executor must drop
+    result rows where this column is NULL or below `sql.min_group_size` (k-anonymity).
     """
 
     ok: bool
@@ -115,6 +118,7 @@ class GuardResult(BaseModel):
     error_kind: ErrorKind | None = None
     message: str = ""
     tables_used: list[str] = Field(default_factory=list)
+    group_size_column: str | None = None
 
 
 # --------------------------------------------------------------------------------------
@@ -277,6 +281,7 @@ TraceEventType = Literal[
     "interrupt",  # paused for confirmation
     "confirmation",  # user answer to a confirmation
     "number_check",  # unverified numbers in facts (non-blocking)
+    "golden_examples",  # Golden Bucket trios added to the prompt (ids, scores)
     "pii_redaction",  # output regex hit
     "turn_end",  # final kind, llm_calls, total latency
     "error",  # any error with kind

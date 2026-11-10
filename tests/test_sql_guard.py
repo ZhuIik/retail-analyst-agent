@@ -122,7 +122,7 @@ def test_bare_table_gets_its_name_as_alias_so_qualified_columns_work():
 
 def test_joins_and_subqueries_are_all_scoped():
     sql = """
-        SELECT p.brand, SUM(oi.sale_price) AS revenue
+        SELECT p.brand, SUM(oi.sale_price) AS revenue, COUNT(DISTINCT oi.user_id) AS customers
         FROM order_items AS oi
         JOIN products p ON p.id = oi.product_id
         WHERE oi.order_id IN (SELECT order_id FROM orders WHERE status = 'Complete')
@@ -145,7 +145,7 @@ def test_parenthesised_query_is_accepted():
 
 
 def test_table_modifiers_stay_attached():
-    tree = ok("SELECT M, F FROM orders PIVOT(COUNT(order_id) FOR gender IN ('M', 'F'))")
+    tree = ok("SELECT Complete, Returned FROM orders PIVOT(COUNT(order_id) FOR status IN ('Complete', 'Returned'))")
     pivot = tree.find(exp.Pivot)
     assert pivot is not None and pivot.parent.name == "__scoped_orders"
 
@@ -471,7 +471,7 @@ def test_personal_columns_are_rejected(sql):
 
 
 def test_scoped_users_has_no_personal_columns_and_hashed_id():
-    tree = ok("SELECT u.country, COUNT(DISTINCT u.id) AS n FROM users u GROUP BY 1", user="ceo")
+    tree = ok("SELECT u.country, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1", user="ceo")
     users = ctes(tree)["__scoped_users"]
     names = select_names(users)
     assert names == ["id", "age", "gender", "state", "city", "country", "traffic_source", "created_at"]
@@ -694,7 +694,8 @@ OK_QUERIES = [
     "SELECT p.category, SUM(oi.sale_price - p.cost) AS margin FROM order_items oi "
     "JOIN products p ON p.id = oi.product_id GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
     "WITH c AS (SELECT user_id, MIN(created_at) AS first FROM orders GROUP BY 1) "
-    "SELECT u.traffic_source, COUNT(*) FROM c JOIN users u ON u.id = c.user_id GROUP BY 1",
+    "SELECT u.traffic_source, COUNT(DISTINCT c.user_id) AS customers "
+    "FROM c JOIN users u ON u.id = c.user_id GROUP BY 1",
     "SELECT status FROM orders UNION ALL SELECT status FROM order_items",
     "SELECT (SELECT COUNT(*) FROM users) AS customers, (SELECT COUNT(*) FROM orders) AS orders_count",
 ]
@@ -704,3 +705,126 @@ OK_QUERIES = [
 @pytest.mark.parametrize("sql", OK_QUERIES)
 def test_scoped_sql_reparses_and_only_touches_scoped_data(sql, user):
     ok(sql, user)  # `ok` re-parses and asserts the invariant
+
+
+# --------------------------------------------------------------------------------------
+# Demographics in aggregates only (k-anonymity, D10)
+# --------------------------------------------------------------------------------------
+
+K = SETTINGS.sql.min_group_size
+
+
+def test_demographic_columns_come_from_schema():
+    from retail_analyst.sql.demographics import demographic_columns
+
+    assert demographic_columns(SCHEMA) == {"age", "gender", "state", "city", "country", "traffic_source"}
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT u.state, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1",
+        "SELECT u.state, SUM(oi.sale_price) AS revenue, COUNT(DISTINCT oi.user_id) AS Customers "
+        "FROM order_items oi JOIN users u ON u.id = oi.user_id GROUP BY 1",
+        # A filter on a demographic defines a group too.
+        "SELECT SUM(oi.sale_price) AS revenue, COUNT(DISTINCT oi.user_id) AS customers "
+        "FROM order_items oi JOIN users u ON u.id = oi.user_id WHERE u.state = 'Texas'",
+        "SELECT CASE WHEN u.age < 30 THEN 'under 30' WHEN u.age < 50 THEN '30-49' ELSE '50+' END AS age_band, "
+        "COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1",
+        "SELECT traffic_source, COUNT(DISTINCT id) AS customers FROM users GROUP BY 1",
+        # The count lives in a CTE and the final SELECT passes it through (by name, alias or *).
+        "WITH by_src AS (SELECT u.traffic_source, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1) "
+        "SELECT traffic_source, customers FROM by_src ORDER BY customers DESC",
+        "WITH a AS (SELECT u.country, COUNT(DISTINCT u.id) AS n FROM users u GROUP BY 1), "
+        "b AS (SELECT country, n AS customers FROM a) SELECT b.country, b.customers FROM b",
+        "WITH by_src AS (SELECT u.traffic_source, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1) "
+        "SELECT * FROM by_src",
+        # The pseudonym is renamed in a CTE and counted later.
+        "WITH c AS (SELECT u.id AS customer, u.gender FROM users u) "
+        "SELECT gender, COUNT(DISTINCT customer) AS customers FROM c GROUP BY 1",
+    ],
+)
+def test_demographic_aggregates_with_customer_count_pass(sql):
+    result = guard(sql, "ceo")
+    assert result.ok, result.message
+    assert result.group_size_column is not None and result.group_size_column.lower() == "customers"
+
+
+def test_group_size_column_keeps_the_models_spelling():
+    result = guard("SELECT state, COUNT(DISTINCT id) AS Customers FROM users GROUP BY 1", "ceo")
+    assert result.group_size_column == "Customers"
+
+
+@pytest.mark.parametrize(
+    ("sql", "column"),
+    [
+        ("SELECT u.state, COUNT(*) AS n FROM users u GROUP BY 1", "state"),
+        ("SELECT u.state FROM users u GROUP BY 1", "state"),
+        ("SELECT COUNT(DISTINCT oi.order_id) AS orders_count FROM order_items oi "
+         "JOIN users u ON u.id = oi.user_id WHERE u.state = 'Texas'", "state"),
+        ("SELECT CASE WHEN age < 30 THEN 'young' ELSE 'other' END AS band, COUNT(*) AS n FROM users GROUP BY 1", "age"),
+        ("SELECT traffic_source, AVG(DATE_DIFF(CURRENT_DATE(), DATE(created_at), DAY)) AS tenure "
+         "FROM users GROUP BY 1", "traffic_source"),
+        # The demographic appears only in a CTE's WHERE: the result still describes that group.
+        ("WITH tx AS (SELECT id FROM users WHERE state = 'Texas') "
+         "SELECT SUM(oi.sale_price) AS revenue FROM order_items oi JOIN tx ON tx.id = oi.user_id", "state"),
+        # Count in a CTE, but the final SELECT does not output it.
+        ("WITH c AS (SELECT city, COUNT(DISTINCT id) AS customers FROM users GROUP BY 1) SELECT city FROM c", "city"),
+        # `customers` must be a distinct count of customer pseudonyms, not anything named so.
+        ("SELECT u.state, COUNT(*) AS customers FROM users u GROUP BY 1", "state"),
+        ("SELECT u.state, COUNT(DISTINCT o.order_id) AS customers FROM users u "
+         "JOIN orders o ON o.user_id = u.id GROUP BY 1", "state"),
+        ("SELECT u.state, COUNT(DISTINCT p.id) AS customers FROM users u JOIN order_items oi ON oi.user_id = u.id "
+         "JOIN products p ON p.id = oi.product_id GROUP BY 1", "state"),
+        ("SELECT u.state, 100 AS customers FROM users u GROUP BY 1", "state"),
+        ("SELECT u.state, APPROX_COUNT_DISTINCT(u.id) AS customers FROM users u GROUP BY 1", "state"),
+        # orders.gender is the same customer attribute (matched by name, like PII columns).
+        ("SELECT gender, COUNT(order_id) AS n FROM orders GROUP BY 1", "gender"),
+        # Every branch of a set operation produces output rows.
+        ("SELECT state, COUNT(DISTINCT id) AS customers FROM users GROUP BY 1 "
+         "UNION ALL SELECT 'all', COUNT(*) FROM users", "state"),
+    ],
+)
+def test_demographics_without_customer_count_are_rejected(sql, column):
+    message = rejected(sql, user="ceo")
+    assert f"customer demographics ({column})" in message
+    assert "COUNT(DISTINCT u.id) AS customers" in message
+    assert f"fewer than {K} customers" in message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT u.id, u.state, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1, 2",
+        "SELECT oi.user_id, SUM(oi.sale_price) AS spend, COUNT(DISTINCT oi.user_id) AS customers "
+        "FROM order_items oi JOIN users u ON u.id = oi.user_id WHERE u.age > 60 GROUP BY 1",
+        "SELECT u.state, ARRAY_AGG(u.id) AS ids, COUNT(DISTINCT u.id) AS customers FROM users u GROUP BY 1",
+        "WITH t AS (SELECT u.id AS cid, u.state FROM users u) SELECT cid, state FROM t",
+        "WITH t AS (SELECT u.id, u.city FROM users u) SELECT * FROM t",
+    ],
+)
+def test_individual_customers_with_demographics_are_rejected(sql):
+    message = rejected(sql, user="ceo")
+    assert "customer ids together with customer demographics" in message
+    assert "COUNT(DISTINCT u.id) AS customers" in message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Top customers by spend: pseudonyms only, no demographics -> not affected.
+        "SELECT oi.user_id, SUM(oi.sale_price) AS spend FROM order_items oi GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+        "SELECT u.id, MIN(u.created_at) AS signed_up FROM users u GROUP BY 1",
+        "SELECT status, COUNT(*) AS n FROM orders GROUP BY status",
+    ],
+)
+def test_queries_without_demographics_are_unaffected(sql):
+    result = guard(sql, "ceo")
+    assert result.ok, result.message
+    assert result.group_size_column is None
+
+
+def test_threshold_in_message_comes_from_settings():
+    settings = SETTINGS.model_copy(update={"sql": SETTINGS.sql.model_copy(update={"min_group_size": 11})})
+    result = guard_and_scope("SELECT state, COUNT(*) AS n FROM users GROUP BY 1", USERS["ceo"], settings, SCHEMA)
+    assert not result.ok and "fewer than 11 customers" in result.message

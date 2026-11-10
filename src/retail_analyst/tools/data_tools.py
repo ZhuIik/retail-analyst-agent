@@ -1,4 +1,4 @@
-"""Data tools: run_sql and describe_data (D11 pipeline, D13 empty-result diagnosis).
+"""Data tools: run_sql and describe_data (D11 pipeline, D13 empty-result diagnosis, D10 k-anonymity).
 
 run_sql is where the two protection layers meet: the SQL guard (scoping, PII, read-only) and the
 BigQuery client (dry-run cost check, byte cap, retries). describe_data reuses the same path, so
@@ -12,8 +12,9 @@ from typing import Literal
 import sqlglot.expressions as exp
 from pydantic import BaseModel, Field
 
-from retail_analyst.config import load_schema
+from retail_analyst.config import Settings, load_schema
 from retail_analyst.contracts import AgentError, ErrorKind, TableData, ToolResult, ToolRisk
+from retail_analyst.sql.demographics import GROUP_SIZE_COLUMN, drop_small_groups
 from retail_analyst.sql.guard import guard_and_scope
 from retail_analyst.tools.registry import ToolContext, ToolOutcome, ToolRegistry, ToolSpec
 
@@ -71,20 +72,54 @@ def _execute(sql: str, purpose: str, ctx: ToolContext) -> ToolOutcome:
 
     query_id = f"q{next(ctx.services['query_counter'])}"
     meta = result.meta
+    columns, rows, hidden = result.data.columns, result.data.rows, 0
+    if guard.group_size_column:
+        # k-anonymity (D10): small demographic groups are dropped here, before the result reaches
+        # state, the preview, saved reports or number checks. Nothing downstream ever sees them.
+        rows, hidden = drop_small_groups(columns, rows, guard.group_size_column, settings.sql.min_group_size)
     trace.event("bq_job", query_id=query_id, job_id=meta.job_id, bytes=meta.bytes_processed,
-                rows=meta.rows_total, ms=meta.elapsed_ms, attempts=meta.attempts)
-    stored = {"sql": sql, "purpose": purpose, "columns": result.data.columns,
-              "rows": result.data.rows, "rows_total": meta.rows_total}
+                rows=meta.rows_total, ms=meta.elapsed_ms, attempts=meta.attempts, hidden_groups=hidden)
+    meta = meta.model_copy(update={"rows_total": max(meta.rows_total - hidden, 0)})
+    stored = {"sql": sql, "purpose": purpose, "columns": columns, "rows": rows, "rows_total": meta.rows_total}
     update = {"queries": {query_id: stored}}
 
+    if hidden and not rows:
+        # Not an EMPTY_RESULT: the filters are right, so no diagnosis (D13) and no fix attempt.
+        return ToolOutcome(
+            ToolResult(status="empty", query_id=query_id, message=_all_hidden_message(hidden, settings)), update
+        )
     if meta.rows_total == 0:
         return ToolOutcome(
             ToolResult(status="empty", error_kind=ErrorKind.EMPTY_RESULT, query_id=query_id, message=_empty_hint(ctx)),
             update,
         )
-    preview = TableData(columns=result.data.columns, rows=result.data.rows[: settings.sql.preview_rows])
+    preview = TableData(columns=columns, rows=rows[: settings.sql.preview_rows])
+    message = _hidden_message(hidden, settings) if hidden else ""
     return ToolOutcome(
-        ToolResult(status="ok", query_id=query_id, data=preview, rows_total=meta.rows_total, meta=meta), update
+        ToolResult(
+            status="ok", query_id=query_id, message=message, data=preview, rows_total=meta.rows_total, meta=meta
+        ),
+        update,
+    )
+
+
+def _hidden_message(hidden: int, settings: Settings) -> str:
+    k = settings.sql.min_group_size
+    groups = "1 group" if hidden == 1 else f"{hidden} groups"
+    verb = "was" if hidden == 1 else "were"
+    return (
+        f"{groups} with fewer than {k} customers {verb} hidden for privacy. "
+        "Say so in the answer; do not try to recover them with other queries."
+    )
+
+
+def _all_hidden_message(hidden: int, settings: Settings) -> str:
+    k = settings.sql.min_group_size
+    return (
+        f"All {hidden} result rows were hidden for privacy: each group has fewer than {k} customers. "
+        "This is privacy suppression, not missing data, so do not change the filters to find rows. "
+        "Use broader groups (e.g. country instead of city, wider age bands, a longer period) "
+        "or tell the user the groups are too small to show."
     )
 
 
@@ -110,7 +145,11 @@ def describe_data(args: DescribeDataArgs, ctx: ToolContext) -> ToolOutcome:
         # STRPOS rather than LIKE: a substring search is not a filter on a foreign brand (D10).
         needle = exp.Literal.string(args.search.lower()).sql("bigquery")
         where += f" AND STRPOS(LOWER({col}), {needle}) > 0"
-    sql = f"SELECT {col} AS value, COUNT(*) AS n FROM {table} WHERE {where} GROUP BY value ORDER BY n DESC LIMIT 30"
+    # Customer demographics are aggregates only: count distinct customers, so rare values
+    # (fewer than sql.min_group_size customers) are hidden like in any other query (D10).
+    count = f"COUNT(DISTINCT id) AS {GROUP_SIZE_COLUMN}" if table == "users" else "COUNT(*) AS n"
+    order = GROUP_SIZE_COLUMN if table == "users" else "n"
+    sql = f"SELECT {col} AS value, {count} FROM {table} WHERE {where} GROUP BY value ORDER BY {order} DESC LIMIT 30"
     return _execute(sql, f"describe {col}", ctx)
 
 

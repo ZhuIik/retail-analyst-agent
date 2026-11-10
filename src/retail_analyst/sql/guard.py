@@ -2,8 +2,9 @@
 
     guard_and_scope(sql, user, settings, schema) -> GuardResult
 
-Pipeline: parse (sqlglot, BigQuery) -> static rules -> foreign-literal check -> scoping
-rewrite -> default LIMIT -> self-check of the generated SQL. The model proposes, the code
+Pipeline: parse (sqlglot, BigQuery) -> static rules -> demographics rule (k-anonymity) ->
+foreign-literal check -> scoping rewrite -> default LIMIT -> self-check of the generated SQL.
+The model proposes, the code
 guarantees (D1): what goes to BigQuery is SQL *regenerated* from the checked AST (comments
 dropped), never the model's original text.
 
@@ -19,6 +20,7 @@ from retail_analyst.config import Settings
 from retail_analyst.contracts import ErrorKind, GuardResult, UserContext
 from retail_analyst.sql import rules
 from retail_analyst.sql.access import find_foreign_literal, foreign_literal_message
+from retail_analyst.sql.demographics import check_demographics
 from retail_analyst.sql.rules import DIALECT, SCOPED_PREFIX, GuardViolation
 from retail_analyst.sql.scoping import build_scoped_ctes, ensure_limit, prepend_ctes, rewrite_tables
 
@@ -34,6 +36,9 @@ def guard_and_scope(sql: str, user: UserContext, settings: Settings, schema: dic
         refs = rules.resolve_tables(root, base_tables, settings.dataset)
         rules.check_no_star(root)
         rules.check_personal_columns(root, schema)
+        # Checked on the model's query, before scoping adds our own CTEs. The result rows are
+        # filtered by group size in run_sql; here we only make sure the count is there.
+        group_size_column = check_demographics(root, refs, schema, settings.sql.min_group_size)
     except GuardViolation as v:
         return GuardResult(ok=False, error_kind=v.kind, message=v.message)
 
@@ -53,7 +58,7 @@ def guard_and_scope(sql: str, user: UserContext, settings: Settings, schema: dic
     except Exception:  # never echo internals: the exception text could contain the salt
         return GuardResult(ok=False, error_kind=ErrorKind.RULE_VIOLATION, message=_SCOPING_FAILED)
 
-    return GuardResult(ok=True, scoped_sql=scoped_sql, tables_used=tables_used)
+    return GuardResult(ok=True, scoped_sql=scoped_sql, tables_used=tables_used, group_size_column=group_size_column)
 
 
 def _verify_scoped(scoped_sql: str, base_tables: set[str]) -> None:

@@ -24,7 +24,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from retail_analyst.agent.graph import build_graph
-from retail_analyst.agent.prompts import PROMPT_VERSION, PromptContext, make_prompt_fn
+from retail_analyst.agent.prompts import PROMPT_VERSION, PromptContext, find_golden_examples, make_prompt_fn
 from retail_analyst.bq.client import BigQueryClient
 from retail_analyst.config import Settings, get_settings, load_users
 from retail_analyst.contracts import AgentError, UserContext
@@ -81,11 +81,21 @@ class Session:
             lambda tools: build_analyst_model(settings, tools, faults, on_event=self._llm_event),
             services,
             settings,
-            make_prompt_fn(prompt_ctx),
+            make_prompt_fn(prompt_ctx, find_examples=self._golden_examples),
         )
         self.thread = self.session_id
         self.started = False
         self.awaiting: dict | None = None  # interrupt payload while a deletion waits for confirmation
+        self._golden_traced_for: str | None = None
+
+    def _golden_examples(self, question: str) -> list:
+        """Golden Bucket retrieval, traced once per turn (the prompt is rebuilt before every model call)."""
+        matches = find_golden_examples(question)
+        if self._golden_traced_for != self.tracer.trace_id:
+            self._golden_traced_for = self.tracer.trace_id
+            ids, scores = [m.trio.id for m in matches], [round(m.score, 2) for m in matches]
+            self.tracer.event("golden_examples", ids=ids, scores=scores)
+        return matches
 
     def _llm_event(self, event_type: str, payload: dict) -> None:
         self.tracer.event(event_type, **payload)  # llm.py reports (type, payload); the tracer takes kwargs

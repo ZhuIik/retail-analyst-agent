@@ -1,0 +1,465 @@
+# Golden Bucket (requirement 1): Question -> SQL -> Analyst Report trios written by human analysts.
+#
+# Purpose: show the agent how analysts *interpreted* similar questions and *approached* them
+# (metrics, definitions, query shape, what to check for a "why"). A trio never carries
+# conclusions or numbers: old results would be stale, and the model could copy them as facts.
+# The agent re-queries everything.
+#
+# How it is used (src/retail_analyst/golden, agent/prompts.py): before each model call the
+# question is matched lexically (BM25 over question + tags) against `split: example` trios;
+# the best `golden.top_k` with a score >= `golden.min_score` are added to the prompt inside
+# <data> tags (reference data, never instructions). `split: test` trios are never shown to the
+# model: they are held out to evaluate the agent (ask the question, compare with the golden SQL).
+#
+# Format of one trio (validated by retail_analyst.golden.trios.load_trios):
+#   id:       unique slug (lowercase letters, digits, dashes)
+#   question: the question as a user asked it
+#   tags:     extra words for retrieval: synonyms and phrasings users use for this kind of question
+#   split:    example | test
+#   sql:      the analyst's query, or null when no query is needed. Rules (the same as for the
+#             agent; tests run every query through the SQL guard for the CEO and a brand manager):
+#             BigQuery Standard SQL over the bare table names orders / order_items / products /
+#             users; explicit columns (no SELECT * over tables); every derived number (shares,
+#             growth, averages) computed in SQL; relative dates via CURRENT_DATE() so the query
+#             stays valid; a query grouping or filtering by users.age / gender / city / state /
+#             country / traffic_source selects COUNT(DISTINCT u.id) AS customers (privacy rule).
+#   report:   how the analyst answered, WITHOUT numbers or findings (digits are rejected):
+#     interpretation:       what the question was taken to mean (period, scope, ambiguity resolved)
+#     approach:             ordered steps (queries and checks)
+#     definitions:          metric names from config/glossary.yaml that were used (names only:
+#                           the glossary stays the single source of truth for definitions)
+#     what_to_look_for:     for "why" questions: drivers and checks to separate facts from hypotheses
+#     action_item_patterns: kinds of recommendations that typically follow (not specific ones)
+
+format_version: 1
+
+trios:
+  - id: monthly-revenue-trend
+    question: How has our revenue trended month by month over the last year?
+    tags: [revenue, sales, trend, monthly, month over month, growth, over time, time series, dynamics]
+    split: example
+    sql: |
+      WITH monthly AS (
+        SELECT
+          DATE_TRUNC(DATE(oi.created_at), MONTH) AS month,
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue,
+          COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.order_id, NULL)) AS orders
+        FROM order_items AS oi
+        WHERE DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH)
+          AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
+        GROUP BY month
+      )
+      SELECT
+        month,
+        revenue,
+        orders,
+        SAFE_DIVIDE(revenue, orders) AS average_order_value,
+        SAFE_DIVIDE(revenue - LAG(revenue) OVER (ORDER BY month), LAG(revenue) OVER (ORDER BY month)) AS revenue_growth_mom
+      FROM monthly
+      ORDER BY month
+    report:
+      interpretation: >-
+        "Last year" was read as the last twelve full calendar months; the current month is
+        incomplete, so it was left out (or shown separately and labelled partial).
+      approach:
+        - Aggregate revenue and orders per calendar month from order_items.
+        - Compute month-over-month growth and average order value in SQL, not by hand.
+        - Split the change into volume (orders) and basket size (average order value).
+        - Compare the same month a year earlier before calling a change a trend (seasonality).
+      definitions: [revenue, orders, average_order_value]
+      what_to_look_for:
+        - Seasonal peaks that repeat every year versus a genuine change in level.
+        - Whether growth comes from more orders or from larger baskets.
+      action_item_patterns:
+        - Prepare stock and campaigns ahead of recurring seasonal peaks.
+        - Investigate months that break the seasonal pattern before acting on them.
+
+  - id: top-customers-by-spend
+    question: Who are our top 10 customers by total spend this year?
+    tags: [top customers, best customers, biggest buyers, spend, spending, ranking, vip, loyal, whales]
+    split: example
+    sql: |
+      WITH per_customer AS (
+        SELECT
+          oi.user_id AS customer,
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue,
+          COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.order_id, NULL)) AS orders
+        FROM order_items AS oi
+        WHERE DATE(oi.created_at) >= DATE_TRUNC(CURRENT_DATE(), YEAR)
+        GROUP BY customer
+      )
+      SELECT
+        customer,
+        revenue,
+        orders,
+        SAFE_DIVIDE(revenue, SUM(revenue) OVER ()) AS share_of_revenue
+      FROM per_customer
+      ORDER BY revenue DESC
+      LIMIT 10
+    report:
+      interpretation: >-
+        "This year" means year-to-date. Customers are shown only as pseudonyms; the ranking is by
+        revenue, with order count to tell one large order from regular buying.
+      approach:
+        - Rank customers by revenue year-to-date and compute each one's share of total revenue in SQL.
+        - Add the order count per customer.
+        - Do not put age, gender, location or channel next to individual customers; if a profile is
+          needed, describe the top segment as an aggregate with customer counts.
+      definitions: [revenue, orders]
+      what_to_look_for:
+        - How concentrated revenue is in the top customers (dependency risk).
+        - Whether top customers buy repeatedly or made a single large purchase.
+      action_item_patterns:
+        - Retention or loyalty offers for the top segment.
+        - Monitor concentration if a few customers carry a large share.
+
+  - id: compare-categories-why
+    question: Jeans vs Outerwear & Coats over the last two quarters - which did better, and why?
+    tags: [compare, comparison, versus, difference, explain, sales, category, categories, brand, brands, drivers, outperform, underperform, better, worse]
+    split: example
+    sql: |
+      SELECT
+        p.category,
+        DATE_TRUNC(DATE(oi.created_at), QUARTER) AS quarter,
+        SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue,
+        COUNTIF(oi.status NOT IN ('Cancelled', 'Returned')) AS units_sold,
+        COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.user_id, NULL)) AS buyers,
+        SAFE_DIVIDE(
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)),
+          COUNTIF(oi.status NOT IN ('Cancelled', 'Returned'))) AS avg_selling_price,
+        SAFE_DIVIDE(
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price - p.cost, 0)),
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0))) AS margin_rate,
+        SAFE_DIVIDE(COUNTIF(oi.status = 'Returned'), COUNTIF(oi.status != 'Cancelled')) AS return_rate
+      FROM order_items AS oi
+      JOIN products AS p ON p.id = oi.product_id
+      WHERE p.category IN ('Jeans', 'Outerwear & Coats')
+        AND DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), QUARTER), INTERVAL 2 QUARTER)
+        AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), QUARTER)
+      GROUP BY p.category, quarter
+      ORDER BY p.category, quarter
+    report:
+      interpretation: >-
+        "Better" was read as revenue first, with margin and returns as quality checks; the period
+        is the last two full quarters. For brands the same shape applies with p.brand (exact
+        spelling looked up with describe_data); a brand manager can only compare their own brands.
+      approach:
+        - One query per segment and quarter with revenue, units, buyers, average selling price,
+          margin rate and return rate.
+        - Decompose the gap into volume (units, buyers) and price (average selling price).
+        - Check the same quarters a year earlier to separate seasonality from a real shift.
+        - Drill down into departments or top products only for the component that explains the gap.
+      definitions: [revenue, units_sold, margin_rate, return_rate]
+      what_to_look_for:
+        - Volume versus price - which component explains most of the gap.
+        - Seasonality (outerwear is seasonal) - compare like-for-like periods.
+        - Mix effects - one department or a few products driving the whole difference.
+        - Returns or margin hiding behind headline revenue.
+        - State causes as hypotheses; the data shows what changed, not why customers chose it.
+      action_item_patterns:
+        - Shift inventory or promotion budget toward the component that is growing.
+        - Investigate the drivers of high returns or low margin before scaling a segment.
+
+  - id: churn-last-month
+    question: How did customer churn change last month compared with the month before?
+    tags: [churn, churned, retention, lost customers, inactive, lapsed, attrition, stopped buying]
+    split: example
+    sql: |
+      WITH months AS (
+        SELECT DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 1 MONTH) AS month_start
+        UNION ALL
+        SELECT DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 2 MONTH) AS month_start
+      ),
+      purchases AS (
+        SELECT DISTINCT oi.user_id AS customer, DATE(oi.created_at) AS purchase_date
+        FROM order_items AS oi
+        WHERE oi.status != 'Cancelled'
+      ),
+      customer_status AS (
+        SELECT
+          m.month_start,
+          p.customer,
+          LOGICAL_OR(p.purchase_date < m.month_start) AS active_at_start,
+          LOGICAL_OR(p.purchase_date >= DATE_SUB(DATE_ADD(m.month_start, INTERVAL 1 MONTH), INTERVAL 90 DAY))
+            AS active_at_end
+        FROM months AS m
+        CROSS JOIN purchases AS p
+        WHERE p.purchase_date >= DATE_SUB(m.month_start, INTERVAL 90 DAY)
+          AND p.purchase_date < DATE_ADD(m.month_start, INTERVAL 1 MONTH)
+        GROUP BY m.month_start, p.customer
+      ),
+      monthly AS (
+        SELECT
+          month_start AS month,
+          COUNTIF(active_at_start) AS active_at_start,
+          COUNTIF(active_at_start AND NOT active_at_end) AS churned,
+          SAFE_DIVIDE(COUNTIF(active_at_start AND NOT active_at_end), COUNTIF(active_at_start)) AS churn_rate
+        FROM customer_status
+        GROUP BY month
+      )
+      SELECT
+        month,
+        active_at_start,
+        churned,
+        churn_rate,
+        churn_rate - LAG(churn_rate) OVER (ORDER BY month) AS churn_rate_change
+      FROM monthly
+      ORDER BY month
+    report:
+      interpretation: >-
+        Churn uses the glossary definition (no purchase in the trailing window before the period
+        end). "Churn last month" = customers active at the start of last full month who were no
+        longer active at its end, as a share of those active at the start; compared with the same
+        measure for the month before. A user-given definition replaces the standard one.
+      approach:
+        - Build distinct (customer, purchase date) pairs from non-cancelled items.
+        - For each month, mark customers active at the start and at the end using the glossary window.
+        - Compute churned customers and churn rate per month, and the change between months, in SQL.
+        - State the definition and the window in assumptions.
+      definitions: [active_customer, churned_customer]
+      what_to_look_for:
+        - Whether the change comes from more customers leaving or from a smaller active base.
+        - Seasonal buying cycles - a quiet month can look like churn; compare a year earlier.
+        - Which categories or channels the churned customers came from (aggregates only).
+      action_item_patterns:
+        - Win-back campaign for recently lapsed customers.
+        - Track churn monthly with the same definition so changes are comparable.
+
+  - id: state-spend-gap
+    question: Why are customers in Texas spending less than customers in California?
+    tags: [state, states, region, geography, location, where, demographic, users, spend, spending, underspending, compare, gap]
+    split: example
+    sql: |
+      SELECT
+        u.state,
+        COUNT(DISTINCT u.id) AS customers,
+        SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue,
+        SAFE_DIVIDE(SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)), COUNT(DISTINCT u.id))
+          AS revenue_per_customer,
+        SAFE_DIVIDE(COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.order_id, NULL)), COUNT(DISTINCT u.id))
+          AS orders_per_customer,
+        SAFE_DIVIDE(
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)),
+          COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.order_id, NULL))) AS average_order_value,
+        SAFE_DIVIDE(COUNTIF(oi.status = 'Returned'), COUNTIF(oi.status != 'Cancelled')) AS return_rate
+      FROM order_items AS oi
+      JOIN users AS u ON u.id = oi.user_id
+      WHERE u.state IN ('Texas', 'California')
+        AND DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH)
+        AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
+      GROUP BY u.state
+    report:
+      interpretation: >-
+        "Spending less" was read per customer (revenue per buying customer over the last twelve
+        full months), not total revenue, which mostly reflects how many customers a state has.
+        Demographics are used only as aggregates with customer counts.
+      approach:
+        - Per state - customers, revenue, revenue per customer, orders per customer, average order
+          value and return rate, all computed in SQL.
+        - Decompose revenue per customer into purchase frequency and basket size.
+        - Compare category mix and acquisition channel mix between the two states (aggregates with
+          customer counts).
+        - Check customer tenure (sign-up date) - newer customers have had less time to spend.
+        - Mention groups hidden for privacy if any.
+      definitions: [revenue, average_order_value, return_rate]
+      what_to_look_for:
+        - Frequency versus basket size - which one explains the gap.
+        - Category mix differences (e.g. seasonal categories in different climates).
+        - Channel mix and customer tenure differences.
+        - Small groups - differences in small states are noisy.
+        - Present reasons as hypotheses; geography correlates with many factors.
+      action_item_patterns:
+        - Targeted campaigns for the categories that under-index in the weaker state.
+        - Repeat-purchase incentives if frequency drives the gap.
+
+  - id: quarterly-business-review
+    question: Prepare a quarterly report for last quarter with key insights and action items for next quarter.
+    tags: [quarterly, quarter, report, review, business review, qbr, insights, action items, recommendations, summary, kpi, overview, performance]
+    split: example
+    sql: |
+      WITH items AS (
+        SELECT
+          DATE_TRUNC(DATE(oi.created_at), QUARTER) AS quarter,
+          oi.order_id,
+          oi.user_id,
+          oi.status,
+          oi.sale_price,
+          p.cost
+        FROM order_items AS oi
+        JOIN products AS p ON p.id = oi.product_id
+        WHERE DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), QUARTER), INTERVAL 5 QUARTER)
+          AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), QUARTER)
+      ),
+      quarterly AS (
+        SELECT
+          quarter,
+          SUM(IF(status NOT IN ('Cancelled', 'Returned'), sale_price, 0)) AS revenue,
+          SUM(IF(status NOT IN ('Cancelled', 'Returned'), sale_price - cost, 0)) AS gross_margin,
+          COUNT(DISTINCT IF(status NOT IN ('Cancelled', 'Returned'), order_id, NULL)) AS orders,
+          COUNT(DISTINCT IF(status != 'Cancelled', user_id, NULL)) AS buyers,
+          SAFE_DIVIDE(COUNTIF(status = 'Returned'), COUNTIF(status != 'Cancelled')) AS return_rate
+        FROM items
+        GROUP BY quarter
+      )
+      SELECT
+        quarter,
+        revenue,
+        gross_margin,
+        SAFE_DIVIDE(gross_margin, revenue) AS margin_rate,
+        orders,
+        SAFE_DIVIDE(revenue, orders) AS average_order_value,
+        buyers,
+        return_rate,
+        SAFE_DIVIDE(revenue - LAG(revenue) OVER (ORDER BY quarter), LAG(revenue) OVER (ORDER BY quarter))
+          AS revenue_growth_qoq,
+        SAFE_DIVIDE(revenue - LAG(revenue, 4) OVER (ORDER BY quarter), LAG(revenue, 4) OVER (ORDER BY quarter))
+          AS revenue_growth_yoy
+      FROM quarterly
+      ORDER BY quarter
+    report:
+      interpretation: >-
+        "Last quarter" is the last full calendar quarter, compared with the previous quarter and the
+        same quarter a year earlier (seasonality). Scope is whatever the user may see.
+      approach:
+        - KPI query - revenue, gross margin, margin rate, orders, average order value, buyers and
+          return rate per quarter, with quarter-over-quarter and year-over-year growth in SQL.
+        - Breakdown by category (or brand for a brand manager) for last quarter versus the previous
+          one, to find what drove the change.
+        - New versus returning customers for last quarter.
+        - Write insights as facts with query ids, explanations as hypotheses, then action items.
+        - Offer to save the report.
+      definitions: [revenue, gross_margin, margin_rate, orders, average_order_value, return_rate, new_customer]
+      what_to_look_for:
+        - The few segments that explain most of the change (do not list everything).
+        - Year-over-year as well as quarter-over-quarter, to avoid reading seasonality as a trend.
+        - Margin and returns moving differently from revenue.
+      action_item_patterns:
+        - Double down on the segments that drove growth (stock, marketing).
+        - Fix or deprioritise segments with falling margin or rising returns.
+        - Retention actions if returning-customer revenue fell.
+        - One owner-ready action per insight, measurable next quarter.
+
+  - id: return-rate-by-category
+    question: Which product categories have the highest return rate?
+    tags: [returns, returned, return rate, refunds, category, categories, quality, highest]
+    split: test
+    sql: |
+      SELECT
+        p.category,
+        COUNTIF(oi.status != 'Cancelled') AS items_not_cancelled,
+        COUNTIF(oi.status = 'Returned') AS items_returned,
+        SAFE_DIVIDE(COUNTIF(oi.status = 'Returned'), COUNTIF(oi.status != 'Cancelled')) AS return_rate,
+        SUM(IF(oi.status = 'Returned', oi.sale_price, 0)) AS returned_value
+      FROM order_items AS oi
+      JOIN products AS p ON p.id = oi.product_id
+      WHERE DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 12 MONTH)
+        AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), MONTH)
+      GROUP BY p.category
+      ORDER BY return_rate DESC
+    report:
+      interpretation: >-
+        Return rate per the glossary, over the last twelve full months, for every category in scope.
+      approach:
+        - Per category - items not cancelled, items returned, return rate and returned value in SQL.
+        - Show volumes next to rates so small categories are not over-read.
+      definitions: [return_rate]
+      what_to_look_for:
+        - Small volumes - a high rate on few items is noise.
+        - Recent orders may not have been returned yet, so the latest weeks understate returns.
+      action_item_patterns:
+        - Review sizing information or product quality in categories with high returns.
+
+  - id: acquisition-by-traffic-source
+    question: Which acquisition channels bring us the most valuable new customers?
+    tags: [acquisition, traffic source, channel, channels, marketing, new customers, sign up, signups, ltv, customer value, facebook, search, email, display, organic]
+    split: example
+    sql: |
+      SELECT
+        u.traffic_source,
+        COUNT(DISTINCT u.id) AS customers,
+        SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue_first_90_days,
+        SAFE_DIVIDE(SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)), COUNT(DISTINCT u.id))
+          AS revenue_per_customer_first_90_days,
+        SAFE_DIVIDE(COUNT(DISTINCT IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.order_id, NULL)), COUNT(DISTINCT u.id))
+          AS orders_per_customer_first_90_days,
+        SAFE_DIVIDE(COUNT(DISTINCT u.id), SUM(COUNT(DISTINCT u.id)) OVER ()) AS share_of_customers
+      FROM users AS u
+      JOIN order_items AS oi
+        ON oi.user_id = u.id
+        AND oi.created_at < TIMESTAMP_ADD(u.created_at, INTERVAL 90 DAY)
+      WHERE DATE(u.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 15 MONTH)
+        AND DATE(u.created_at) < DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 3 MONTH)
+      GROUP BY u.traffic_source
+      ORDER BY revenue_per_customer_first_90_days DESC
+    report:
+      interpretation: >-
+        "Most valuable" was read as revenue per customer in a fixed window after sign-up, so old and
+        new cohorts are comparable; the cohort is customers who signed up in a twelve-month window
+        that ended long enough ago for every customer to have the full window. Only buying
+        customers are visible, so sign-up-to-purchase conversion cannot be measured.
+      approach:
+        - Per traffic source - customers, revenue in the first days after sign-up, revenue and
+          orders per customer, and share of customers, all in SQL.
+        - Compare channels on value per customer and on volume separately.
+        - Optionally check repeat rate per channel.
+      definitions: [revenue, repeat_rate]
+      what_to_look_for:
+        - Volume versus value - a big channel can bring low-value customers.
+        - Channels with few customers - differences are noisy.
+        - There is no marketing cost in the data, so return on spend cannot be computed; say so.
+      action_item_patterns:
+        - Shift budget toward channels with high value per customer, after checking acquisition cost.
+        - Onboarding or second-purchase offers for channels with low early value.
+
+  - id: data-available
+    question: What data do you have access to?
+    tags: [data, available, availability, tables, schema, columns, coverage, date range, access, scope, what can i ask]
+    split: example
+    sql: null
+    report:
+      interpretation: >-
+        A question about the data itself, not about the business. Answered from the schema, the
+        data range and the user's access scope already in the context; no query is needed.
+      approach:
+        - Describe the tables in business terms (orders, items sold, products, customers) and the
+          date range of the data.
+        - State the user's access scope (all data, or limited to their brands).
+        - Mention that customers are pseudonymous and personal data is not available.
+        - Give a few example questions the user can ask.
+      definitions: []
+      what_to_look_for: []
+      action_item_patterns: []
+
+  - id: top-products-by-margin
+    question: Which 10 products earned the most gross margin last quarter?
+    tags: [products, product, top, margin, gross margin, profit, profitable, best sellers]
+    split: test
+    sql: |
+      SELECT
+        p.id AS product_id,
+        p.name AS product_name,
+        p.category,
+        p.brand,
+        COUNTIF(oi.status NOT IN ('Cancelled', 'Returned')) AS units_sold,
+        SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0)) AS revenue,
+        SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price - p.cost, 0)) AS gross_margin,
+        SAFE_DIVIDE(
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price - p.cost, 0)),
+          SUM(IF(oi.status NOT IN ('Cancelled', 'Returned'), oi.sale_price, 0))) AS margin_rate
+      FROM order_items AS oi
+      JOIN products AS p ON p.id = oi.product_id
+      WHERE DATE(oi.created_at) >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), QUARTER), INTERVAL 1 QUARTER)
+        AND DATE(oi.created_at) < DATE_TRUNC(CURRENT_DATE(), QUARTER)
+      GROUP BY product_id, product_name, p.category, p.brand
+      ORDER BY gross_margin DESC
+      LIMIT 10
+    report:
+      interpretation: >-
+        Gross margin per the glossary, for the last full calendar quarter, ranked by product.
+      approach:
+        - Per product - units sold, revenue, gross margin and margin rate in SQL; top ten by gross margin.
+      definitions: [units_sold, revenue, gross_margin, margin_rate]
+      what_to_look_for:
+        - Products high on margin because of volume versus because of price.
+      action_item_patterns:
+        - Protect stock of high-margin best sellers.
