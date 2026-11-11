@@ -54,6 +54,11 @@ uv run analyst --user ceo       # all data
 In the chat: `/help` (examples), `/reports` (your saved reports), `/trace` (what happened in the
 last answer), `/quit`. These commands work even when the model is unavailable.
 
+**Optional: traces in Langfuse Cloud.** Every answer is traced locally (`traces/*.jsonl`,
+`/trace`). To also see traces in [Langfuse](https://cloud.langfuse.com), set
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` in `.env`. Without them the
+agent works exactly the same; wrong keys or no network never interrupt a conversation.
+
 **See the failure handling** (requirement 5) by injecting faults:
 ```bash
 uv run analyst --user ceo --simulate llm_429,bq_timeout

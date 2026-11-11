@@ -55,7 +55,7 @@ need data or budget the prototype does not have (section 2.3).
 The system has two parts: the **request path** that answers a question in seconds, and
 **background processes** that keep the knowledge, the persona and the quality checks up to date.
 
-![Request path: how one question is answered](request-path.png)
+![Request path: how one question is answered](request-path.svg)
 
 **How a question flows** (numbers match the diagram).
 
@@ -77,7 +77,7 @@ The system has two parts: the **request path** that answers a question in second
    deletion confirmation.
 6. Every step is traced.
 
-![Background processes: keeping knowledge and quality up to date](background-processes.png)
+![Background processes: keeping knowledge and quality up to date](background-processes.svg)
 
 **Background processes.** Analysts approve new Question → SQL → Report trios into Cloud Storage;
 an ingestion job validates each one with the same SQL guard the agent uses, dry-runs it, strips
@@ -109,7 +109,7 @@ deleted which ids and when.
 
 ### 2.2 The agent graph
 
-![Agent graph: the agent's internal loop](agent-graph.png)
+![Agent graph: the agent's internal loop](agent-graph.svg)
 
 - **agent** calls the model with the system prompt (role, rules, schema of the user's scoped
   tables, metric glossary, SQL dialect rules, today's date and data range, the user's scope,
@@ -146,7 +146,7 @@ deleted which ids and when.
 | Golden Bucket                         | hybrid retrieval (BM25 + embeddings), ingestion pipeline            | 10 trios, BM25, same safety validation                   |
 | State                                 | Postgres (checkpoints, reports, preferences, persona)               | in-memory checkpointer, SQLite reports                   |
 | Models                                | Gemini Flash on Vertex AI, fallback chain                           | Gemini 3.5 Flash-Lite on AI Studio, 2 fallback models    |
-| Tracing                               | OpenTelemetry → backend by data-residency rule; dashboards, alerts | JSONL per session + `/trace`                           |
+| Tracing                               | OpenTelemetry → Langfuse Cloud (approved by the client); dashboards, alerts | JSONL per session + `/trace`; Langfuse Cloud when keys are set |
 | Persona / tone                        | admin page, versions, automated quality gate                        | — (design only)                                         |
 
 **What is simplified and what is not.** The prototype has the full set of code-level safety
@@ -259,7 +259,7 @@ a cost guard in the SQL validator, and a checklist-style critic.
 | SQL safety       | **sqlglot AST**: parse, check, rewrite, regenerate                 | regex on SQL (bypassed by comments, aliases, case); only a read-only role (blocks writes, not other brands or PII)                                                                                                                                          |
 | State database   | **Postgres**                                                       | Firestore (no maintained LangGraph checkpointer; reports, audit and preferences are relational); BigQuery (analytical, slow single-row writes); Redis (not durable enough for an audit log)                                                                 |
 | Golden retrieval | **in-memory index** loaded from a file in Cloud Storage (BM25 now, + embeddings in production) | a search service (Vertex AI Search) or Postgres with pgvector and full-text search at tens of thousands of trios; BigQuery `VECTOR_SEARCH` adds seconds per question; Vertex AI Vector Search is for millions |
-| Tracing          | **OpenTelemetry**, backend by rule                                 | data must stay in the client's cloud and nobody operates extra services → Cloud Trace/Logging; data must stay and a team can operate it → self-hosted Langfuse (Postgres, ClickHouse, Redis, object storage); SaaS allowed → Langfuse Cloud or LangSmith |
+| Tracing          | **Langfuse Cloud** over OpenTelemetry (the client allows traces in SaaS) | LLM-aware views (prompts, tool calls, tokens, cost per trace, sessions, scores) without operating anything; if data had to stay in the client's cloud: Cloud Trace/Logging when nobody can operate extra services, self-hosted Langfuse (Postgres, ClickHouse, Redis, object storage) when a team can; LangSmith is the equivalent SaaS |
 | Python tooling   | **uv** + `pyproject.toml`, `requirements.txt` exported for pip | —                                                                                                                                                                                                                                                          |
 
 ---
@@ -546,6 +546,13 @@ status and the error the model was given, SQL guard verdicts, BigQuery jobs (byt
 attempts, hidden groups), confirmations, number-check mismatches and PII redactions. String
 values pass the PII regex.
 
+**Langfuse Cloud in the prototype.** If `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set,
+every turn is also sent to Langfuse through its LangChain callback: the graph run, each model
+call with prompt, tokens and latency, and each tool call, grouped by session and user and tagged
+with the local trace id. Strings pass the same PII regex before they leave. Without keys, with
+wrong keys or without network nothing changes for the user: export runs in the background and
+the local JSONL trace is always written; `analyst-doctor` reports whether the keys are accepted.
+
 **Metrics** (by prompt version and model):
 - *quality:* answers by kind, SQL error and self-correction rates, empty results, unverified
   numbers per answer, user corrections;
@@ -565,7 +572,7 @@ example, the trace of a failed answer showed `503 UNAVAILABLE: high demand` on b
 models, which led to adding a third fallback model.
 
 **Production.** The same events as OpenTelemetry spans (one trace per turn, one span per node,
-model call and query), sent to the backend chosen by the data-residency rule (section 3.5), with
+model call and query), sent to Langfuse Cloud (section 3.5), with
 dashboards, alerts, a retention period and restricted access.
 
 ### 5.8 Persona management (design)

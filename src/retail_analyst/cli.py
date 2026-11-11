@@ -29,6 +29,7 @@ from retail_analyst.bq.client import BigQueryClient
 from retail_analyst.config import Settings, get_settings, load_users
 from retail_analyst.contracts import AgentError, UserContext
 from retail_analyst.faults import FAULT_MODES, FaultInjector
+from retail_analyst.langfuse_export import LangfuseExport
 from retail_analyst.llm import build_analyst_model
 from retail_analyst.reports.store import ReportStore
 from retail_analyst.tools.data_tools import register_data_tools
@@ -62,6 +63,7 @@ class Session:
         self.user, self.settings = user, settings
         self.session_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
         self.tracer = Tracer(settings.resolve(settings.tracing.dir), self.session_id, user.user_id)
+        self.langfuse = LangfuseExport()  # optional: only when LANGFUSE_* keys are set
         self.reports = ReportStore(settings.resolve(settings.reports.db_path))
         bq = BigQueryClient(settings, faults)
         # A separate client without fault injection: the simulated faults are kept for the demo questions.
@@ -102,7 +104,8 @@ class Session:
 
     @property
     def config(self) -> dict:
-        return {"configurable": {"thread_id": self.thread}}
+        run = self.langfuse.run_config(self.session_id, self.user.user_id, self.tracer.trace_id)
+        return {"configurable": {"thread_id": self.thread}, **run}
 
     def ask(self, text: str) -> None:
         if self.awaiting:
@@ -246,6 +249,8 @@ def main() -> None:
         console.print(f"[dim]Data scope: {user.access.column} in {', '.join(user.access.values)}[/]")
     if modes:
         console.print(f"[yellow]Simulating faults: {', '.join(sorted(modes))}[/]")
+    traces = "local JSONL + Langfuse Cloud" if session.langfuse.enabled else "local JSONL"
+    console.print(f"[dim]Traces: {traces}[/]")
     console.print("[dim]Type /help for examples and commands.[/]\n")
 
     while True:
@@ -267,6 +272,7 @@ def main() -> None:
         else:
             session.ask(text)
         console.print()
+    session.langfuse.flush()  # send what is still buffered; never raises
     sys.exit(0)
 
 

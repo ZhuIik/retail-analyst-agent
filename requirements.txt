@@ -7,6 +7,8 @@ anyio==4.16.0
     #   httpx
     #   httpx2
     #   langsmith
+backoff==2.2.1
+    # via langfuse
 certifi==2026.10.23
     # via
     #   httpcore
@@ -49,6 +51,7 @@ googleapis-common-protos==1.76.0
     # via
     #   google-api-core
     #   grpcio-status
+    #   opentelemetry-exporter-otlp-proto-http
 grpcio==1.85.1
     # via
     #   google-api-core
@@ -66,6 +69,7 @@ httpcore2==2.16.0 ; sys_platform != 'emscripten'
 httpx==0.28.1
     # via
     #   langchain-core
+    #   langfuse
     #   langgraph-sdk
 httpx2==2.16.0
     # via
@@ -97,6 +101,8 @@ langchain-protocol==0.0.21
     # via
     #   langchain-core
     #   langgraph-sdk
+langfuse==5.2.0
+    # via retail-analyst
 langgraph==1.2.20
     # via retail-analyst
 langgraph-checkpoint==4.3.1
@@ -114,7 +120,32 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
     # via markdown-it-py
 opentelemetry-api==1.45.2
-    # via google-api-core
+    # via
+    #   google-api-core
+    #   langfuse
+    #   opentelemetry-exporter-http-transport
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+opentelemetry-exporter-http-transport==0.66b2
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-common==0.66b2
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-common==1.45.2
+    # via opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-http==1.45.2
+    # via langfuse
+opentelemetry-proto==1.45.2
+    # via
+    #   opentelemetry-exporter-otlp-proto-common
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-sdk==1.45.2
+    # via
+    #   langfuse
+    #   opentelemetry-exporter-otlp-common
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-semantic-conventions==0.66b2
+    # via opentelemetry-sdk
 orjson==3.13.0
     # via
     #   langgraph-sdk
@@ -125,6 +156,7 @@ packaging==26.3
     # via
     #   google-cloud-bigquery
     #   langchain-core
+    #   langfuse
     #   langsmith
 proto-plus==1.29.0
     # via google-api-core
@@ -133,6 +165,7 @@ protobuf==7.36.2
     #   google-api-core
     #   googleapis-common-protos
     #   grpcio-status
+    #   opentelemetry-proto
     #   proto-plus
 pyasn1==0.6.5
     # via pyasn1-modules
@@ -145,6 +178,7 @@ pydantic==2.14.3
     #   google-genai
     #   langchain-core
     #   langchain-google-genai
+    #   langfuse
     #   langgraph
     #   langsmith
     #   retail-analyst
@@ -167,6 +201,8 @@ requests==2.34.2
     #   google-cloud-bigquery
     #   google-genai
     #   langsmith
+    #   opentelemetry-exporter-http-transport
+    #   opentelemetry-exporter-otlp-proto-http
     #   requests-toolbelt
 requests-toolbelt==1.0.0
     # via langsmith
@@ -196,8 +232,12 @@ typing-extensions==4.16.0
     #   httpx2
     #   langchain-core
     #   langchain-protocol
+    #   langfuse
     #   langsmith
     #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
     #   pydantic
     #   pydantic-core
     #   typing-inspection
@@ -214,6 +254,8 @@ websockets==17.4
     #   google-genai
     #   langgraph-sdk
     #   langsmith
+wrapt==2.5.2
+    # via langfuse
 xxhash==4.0.2
     # via
     #   langgraph

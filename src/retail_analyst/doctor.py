@@ -1,7 +1,7 @@
 """`analyst-doctor`: check the environment before the first question.
 
 Prints OK / FAIL with a fix hint for each check and exits with code 1 if any check fails.
-Region blocks are recognised for both Gemini and BigQuery (section 6, check 9a).
+Region blocks are recognised for both Gemini and BigQuery. Langfuse is optional and never fails the run.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from rich.console import Console
 from retail_analyst.bq.client import LOCATION_BLOCKED_MESSAGE, BigQueryClient
 from retail_analyst.config import PROJECT_ROOT, Settings, get_settings
 from retail_analyst.contracts import AgentError, ErrorKind
+from retail_analyst.langfuse_export import LangfuseExport
 from retail_analyst.llm import classify_llm_error
 
 TABLES = ("orders", "order_items", "products", "users")
@@ -112,6 +113,17 @@ def _check_tables(settings: Settings) -> str:
     return ", ".join(f"{t} ({n} cols)" for t, n in counts.items())
 
 
+def _report_langfuse() -> None:
+    export = LangfuseExport()
+    if not export.enabled:
+        console.print("[dim]--[/dim]   Langfuse: not configured (optional; traces are written locally)")
+    elif export.check():
+        console.print("[green]OK[/green]   Langfuse: keys accepted, traces are also sent to Langfuse")
+    else:
+        console.print("[yellow]WARN[/yellow] Langfuse: keys rejected or unreachable; the agent still works, "
+                      "traces stay local")
+
+
 def main() -> None:
     settings = get_settings()
     console.print("[bold]Retail analyst — environment check[/bold]")
@@ -124,6 +136,7 @@ def main() -> None:
     if adc_ok:  # without credentials the BigQuery checks would only repeat the same failure
         results.append(_check(f"dry-run on {settings.dataset}.orders", lambda: _check_dry_run(settings)))
         results.append(_check("dataset tables reachable", lambda: _check_tables(settings)))
+    _report_langfuse()  # informational: tracing to Langfuse is optional
     ok = all(results)
     console.print("[green]All checks passed.[/green]" if ok else "[red]Some checks failed.[/red]")
     sys.exit(0 if ok else 1)
