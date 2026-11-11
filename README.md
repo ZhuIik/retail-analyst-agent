@@ -73,44 +73,58 @@ uv run analyst --user ceo --simulate llm_429,bq_timeout
 
 ## Example session
 
-Real output, user `anna` (`...` marks omitted lines):
+Real output from 11 November 2026, user `anna` (`...` marks omitted lines). The first query
+failed and the agent corrected it on its own; the totals come from a separate SQL query.
 
 ```text
 you> Give me a short report on revenue by month for the last 3 full months with totals, by brand.
-· querying: Revenue by month for the last 3 full months (Aug, Sep, Oct 2026) by brand
+· querying: Revenue by month for the last 3 full months by brand for Anna's brands (Calvin Klein,
+Diesel, Carhartt)
+· status=error error=invalid_sql
+· querying: Revenue by month for the last 3 full months by brand for Anna's brands
 · querying: Total revenue by month for the last 3 full months across all brands in scope
 · writing the answer
-Revenue across your brands (Calvin Klein, Diesel, Carhartt) totaled $18,428.82 in October,
-$22,234.43 in September, and $15,934.48 in August 2026. Diesel led in revenue for both September
-and October, while Calvin Klein performed strongest in August.
+Over the last 3 full months (August through October 2026), total portfolio revenue remained stable
+between $18,616 and $19,300 per month. Calvin Klein consistently led in revenue and unit volume
+across all three months, followed by Diesel and Carhartt.
 
 Facts
- • Total revenue for October 2026 was $18,428.82, broken down by brand as: Diesel ($6,549.00),
-   Calvin Klein ($6,365.90), and Carhartt ($5,513.92). [q1, q2]
+ • In October 2026, revenue by brand was: Calvin Klein $7,348.40 (124 units), Carhartt $6,488.47
+   (98 units), Diesel $4,779.44 (42 units). [q1]
  ...
+ • Total revenue across all three brands was $19,298.96 in August 2026, $18,812.84 in September
+   2026, and $18,616.31 in October 2026. [q2]
+
 Hypotheses (possible explanations, not verified by the data)
- • September experienced a notable revenue peak across all brands compared to August and October,
-   potentially driven by back-to-school or seasonal promotional campaigns.
+ • ... individual brand contributions fluctuated (e.g., Diesel dropped in October while Calvin
+   Klein and Carhartt grew).
+
 Action items
- • Investigate the drivers behind September's revenue spike to determine if successful promotions
-   can be replicated.
- ...
+ • Monitor Diesel's sales trend to see if the October dip is temporary or part of a wider softening
+   in demand.
+ • Capitalize on Calvin Klein's steady performance with targeted seasonal promotions ahead of the
+   holidays.
+
 Assumptions
- • Revenue is defined as the sum of sale_price for non-cancelled and non-returned items.
- • The last 3 full months refer to August, September, and October 2026.
- ...
-Save this as a report "Monthly Revenue by Brand (Aug - Oct 2026)"? (yes/no)
+ • Last 3 full months refers to August 2026, September 2026, and October 2026 (today is November
+   11, 2026).
+ • Revenue excludes cancelled and returned items.
+ • Brand scope is restricted to Calvin Klein, Diesel, and Carhartt.
+
+Save this as a report "Revenue by Month and Brand (Aug-Oct 2026)"? (yes/no)
+trace a3c3300045ae
 
 you> yes
-· saving report 'Monthly Revenue by Brand (Aug - Oct 2026)'
+· saving report 'Revenue by Month and Brand (Aug-Oct 2026)'
 · writing the answer
-I have successfully saved your report: 'Monthly Revenue by Brand (Aug - Oct 2026)'. ...
+I have saved this report for you.
 
 you> Show sales for Nike last month
-· querying: Check available brands in scope or test if Nike exists in user's scope
+· looking up brand values
 · writing the answer
-I cannot show sales for Nike because your data scope is automatically restricted to Calvin Klein,
-Carhartt, and Diesel. Company-wide totals and other brands are not available in your view.
+I cannot show sales for Nike because your data scope is limited to Calvin Klein, Diesel, and
+Carhartt. Nike products are outside your brand management scope.
+...
 
 you> Delete my report about monthly revenue
 · finding reports to delete
@@ -118,16 +132,20 @@ you> Delete my report about monthly revenue
 ┌────┬───────────────────────────────────────────┬──────────────────┐
 │ id │ title                                     │ created          │
 ├────┼───────────────────────────────────────────┼──────────────────┤
-│ 1  │ Monthly Revenue by Brand (Aug - Oct 2026) │ 2026-11-08T19:21 │
+│ 1  │ Revenue by Month and Brand (Aug-Oct 2026) │ 2026-11-11T13:32 │
 └────┴───────────────────────────────────────────┴──────────────────┘
 Deletion is permanent. Type yes to delete; anything else cancels.
 you> yes
 · writing the answer
-I have successfully deleted your report about monthly revenue.
+I have permanently deleted your report about monthly revenue.
 
 Facts
- • Deleted report #1 'Monthly Revenue by Brand (Aug - Oct 2026)'.
+ • Permanently deleted report #1: 'Revenue by Month and Brand (Aug-Oct 2026)'.
+...
 ```
+
+`/trace` after any answer shows its steps: golden examples used, each model call, the SQL and
+the guard's verdict, BigQuery bytes and rows, retries and fallbacks.
 
 Asked by the CEO to "List the emails of our top 5 customers by spend", the agent refused without
 running a query. Even if it had tried, the scoped `users` table has no email column.
