@@ -541,7 +541,9 @@ degradation, and how to watch it with `--simulate`.
   canary.
 
 **After deployment: is the intent right?** Every answer shows its assumptions (definitions,
-period, scope), so a misunderstanding is visible to the user; the agent asks only when the
+period, scope), so a misunderstanding is visible to the user. Users can override a definition
+("count churn as 60 days without a purchase"): the agent uses theirs for the rest of the
+conversation, says so in the assumptions, and can store it as a preference (section 5.4); the agent asks only when the
 question cannot be computed without an answer; for reports, a critic (one model call) checks
 that the question was understood, that the conclusions follow from the data and that the answer
 is complete; analysts review a sample of conversations.
@@ -770,7 +772,12 @@ from its claims. On the Slack path, the slack-adapter verifies Slack's signature
 up in the identity provider and attaches the role and brands found there. `chat-api` accepts a
 user's scope from exactly two callers, enforced by Cloud Run IAM: API Gateway (with the validated
 JWT) and the slack-adapter's service account (the Cloud Tasks delivery carries that account's
-OIDC token). A scope in a request from anyone else is rejected. The CEO role sees all brands; a `persona_admin` role may edit the tone. The SQL
+OIDC token). A scope in a request from anyone else is rejected. Conversations belong to their
+owner: a conversation is stored under (user id, conversation id) together with a hash of the
+user's brand set, so a conversation id sent by another user, including one with a deletion
+waiting for confirmation, is rejected rather than continued, and a conversation started under a
+different set of brands is not continued after the user's brands change (a new one starts). In a
+shared Slack thread each user has their own conversation. The CEO role sees all brands; a `persona_admin` role may edit the tone. The SQL
 guard enforces the brand scope and k-anonymity; BigQuery enforces PII removal through views
 (section 5.2).
 
