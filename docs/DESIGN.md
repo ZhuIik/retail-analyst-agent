@@ -101,16 +101,15 @@ an ingestion job validates each one with the same SQL guard the agent uses, dry-
 numerical findings from the report, embeds it and publishes a new index file to Cloud Storage,
 which `chat-api` loads into memory. The CEO's tone edits go through an automated quality gate and are published
 as a new persona version without a redeploy. A nightly evaluation runs the golden test set.
-Traces leave `chat-api` as OpenTelemetry spans through a collector with two destinations: full
-traces go to Langfuse Cloud for debugging, and the same events without text (ids, statuses,
-scores, sizes, timings) go to BigQuery for dashboards. Failed or corrected answers found there
-become candidate trios for the analysts, which closes the learning loop (requirements 1 and 4).
+Traces go to Langfuse Cloud, together with the users' ratings (as scores). A nightly job reads
+the low-rated and corrected answers from there and turns them into candidate trios for the
+analysts, which closes the learning loop (requirements 1 and 4).
 
 **Where data lives.**
 
 | Data                                                | Store                                   | Notes                                                                                         |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Transactions                                        | BigQuery (`thelook_ecommerce`)        | read-only; authorized views without PII columns; aggregation threshold rule on the demographic view |
+| Transactions                                        | BigQuery (`thelook_ecommerce`)        | read-only; authorized views without PII columns                                               |
 | Conversations, checkpoints                          | Cloud SQL Postgres                      | LangGraph Postgres checkpointer; deleted after 30 days                                        |
 | Saved reports, audit log                            | Cloud SQL Postgres                      | reports private to the author; hard delete (see below); audit keeps who / when / which ids, never content |
 | User preferences                                    | Cloud SQL Postgres                      | fixed fields + free-text notes (requirement 4)                                                |
@@ -118,7 +117,8 @@ become candidate trios for the analysts, which closes the learning loop (require
 | Item table for scoping (brand, date, customer)      | BigQuery                                | denormalised `order_items`, clustered by brand, refreshed hourly by a scheduled query |
 | Golden Bucket trios and index                       | Cloud Storage                           | trios are the source of truth; the ingestion job publishes a versioned index file (BM25 statistics + embeddings) that chat-api loads into memory |
 | Metric glossary, schema descriptions, dialect rules | Git (config files)                      | reviewed changes, regression-tested                                                           |
-| Traces, metrics                                     | OpenTelemetry backend + BigQuery export | PII-redacted, access-restricted, retention-limited                                            |
+| Traces, ratings                                     | Langfuse Cloud                          | PII-redacted, access-restricted, 30-day retention                                             |
+| Metrics                                             | Cloud Monitoring                        | counts and timings only, no text; alerts                                                      |
 | Secrets                                             | Secret Manager                          | API keys, pseudonym salt                                                                      |
 
 **What "hard delete" means here.** A deleted report is removed from the reports table at once
@@ -126,8 +126,8 @@ and cannot be restored through the product. Copies outside the table expire on a
 conversation in which the report was written (30 days), database backups and point-in-time
 recovery (7 days), and the Langfuse traces of that conversation (the report text is part of the
 conversation history, so every later turn of it contains it; on deletion all traces of the
-session are deleted through the Langfuse API, using the session id stored with the report). The
-BigQuery trace export never contains answer text. A report already shown in Slack stays in Slack's
+session are deleted through the Langfuse API, using the session id stored with the report). A
+report already shown in Slack stays in Slack's
 history, which this system does not control. The audit row keeps only who deleted which ids and
 when.
 
@@ -164,7 +164,7 @@ when.
 | Agent graph, tools, `submit_answer` | same                                                                | same                                                     |
 | Brand scoping                         | SQL guard over a brand-clustered item table (section 8; database-level option in 5.2) | SQL guard                                    |
 | PII                                   | guard **and** BigQuery views without PII columns                    | guard (the public dataset cannot carry our views)        |
-| k-anonymity                           | guard **and** a BigQuery aggregation threshold rule                 | guard + result suppression (min group 5)                 |
+| k-anonymity                           | guard + result suppression (min group 5)                            | same                                                     |
 | Deletion confirmation                 | same                                                                | same                                                     |
 | Numbers in answers                    | placeholders bound to query columns, rendered by code               | model writes numbers; non-blocking number check          |
 | Critic (quality review of reports)    | one extra model call for reports                                    | —                                                       |
@@ -176,8 +176,8 @@ when.
 
 **What is simplified and what is not.** The prototype has the full set of code-level safety
 controls: the model's mistakes cannot expose PII or another brand's data, and nothing is deleted
-without confirmation. What only production adds is the database-level layer, which also stops
-deliberately crafted queries (section 5.2, "Known limits"). Quality controls are reduced (no
+without confirmation. Production adds a database-level layer for PII; deliberately crafted
+queries against k-anonymity remain a known limit in both (section 5.2). Quality controls are reduced (no
 critic, no number placeholders), because they need a paid model budget and an evaluation set;
 the free tier allows ~15 requests per minute.
 
@@ -200,8 +200,8 @@ data is in **BigQuery** and the model is **Gemini**. On GCP:
 - **Data stays in one cloud.** Query results and prompts stay in Google Cloud on the request
   path; outside copies are the traces in Langfuse Cloud (approved by the client) and the answers
   users receive in Slack.
-- **The engine enforces privacy.** BigQuery authorized views and aggregation threshold rules
-  give a second, database-level layer for PII and k-anonymity (section 5.2).
+- **The engine enforces privacy.** BigQuery authorized views give a second, database-level layer
+  for PII (section 5.2).
 
 **The design is portable.** Every component is a container, Postgres, a queue or OpenTelemetry.
 If the platform must be AWS, the same architecture maps as follows:
@@ -316,10 +316,10 @@ Example: a brand manager asks *"Why are customers in Texas spending less than in
   what the model can query, so none can reach the model.
 - **To BigQuery:** only SQL regenerated by the guard, never the model's raw text.
 - **To the client:** formatted text after the PII regex.
-- **To traces:** locally and to BigQuery: questions, SQL, statuses, sizes, timings, error causes,
-  without result rows or answer text. To Langfuse Cloud: the full turn, including prompts, the
-  scoped and pseudonymised result previews the model saw, and the answer. All strings pass the
-  PII regex first.
+- **To traces:** the local trace (prototype) holds questions, SQL, statuses, sizes, timings and
+  error causes, without result rows or answer text. Langfuse Cloud receives the full turn,
+  including prompts, the scoped and pseudonymised result previews the model saw, and the answer.
+  All strings pass the PII regex first.
 
 ### 4.2 A destructive request
 
@@ -431,16 +431,12 @@ sales"*.
 **Production adds a second layer in the database** where the database can enforce it. All
 queries run as one read-only service account, and BigQuery's own access controls decide by the
 identity that runs the query, so the database cannot tell which manager is asking. The layer
-therefore covers what is the same for everyone:
+therefore covers only what is the same for everyone:
 - **PII:** the service account can read only authorized views that do not contain PII columns.
-- **k-anonymity:** demographics are served from a separate view with an aggregation threshold
-  rule (privacy unit: the customer, threshold 5). Purchase data used for per-customer metrics
-  ("top customers" with pseudonyms) comes from another view **without** demographics; a single
-  view with the threshold would suppress every per-customer row. Queries on a view with this rule
-  must use `SELECT WITH AGGREGATION_THRESHOLD` and accept some SQL restrictions, so the guard
-  would add the clause to demographic queries; whether that combines with our scoping rewrite is
-  **to be validated** in BigQuery before relying on it. Until then the guard's suppression is the
-  enforcement.
+- **k-anonymity** is enforced by the guard and the result suppression, as in the prototype. A
+  possible hardening is BigQuery's aggregation threshold rule on a demographics view; it needs
+  its own query syntax and SQL restrictions, so it would have to be validated against the
+  scoping rewrite first.
 
 **Brand scoping stays in the guard.** A database-level copy of it would need BigQuery to know the
 user: queries would run with the user's own credentials (OAuth through the client's identity
@@ -459,7 +455,7 @@ query.
 
 **Known limits.** The code-level checks stop the model's mistakes, not every deliberately crafted
 query: the k-anonymity check reads the SQL, so differencing two allowed aggregates can still
-reveal a small group, which is why production also enforces the threshold in BigQuery. The PII
+reveal a small group (the BigQuery hardening above would close that). The PII
 regex catches emails, phones and card numbers, not names: a name the user types into a question
 reaches the model and the trace as written.
 
@@ -503,7 +499,7 @@ this user without changing the agent for everyone.
 **Where feedback comes from.** Explicit: thumbs up/down on every answer in the web chat and
 reactions on the bot's message in Slack, with an optional one-line comment. Implicit: a question
 rephrased right after an answer, a report saved or deleted, a conversation abandoned after an
-answer. Both are recorded against the trace id of the answer.
+answer. Both are recorded in Langfuse as scores on the answer's trace.
 
 **System level: the system improves itself, within guard rails.**
 - *Automatically, without a human:*
@@ -611,8 +607,9 @@ example, the trace of a failed answer showed `503 UNAVAILABLE: high demand` on b
 models, which led to adding a third fallback model.
 
 **Production.** The same events as OpenTelemetry spans (one trace per turn, one span per node,
-model call and query). A collector sends full traces to Langfuse Cloud (EU or US region as the client prefers; 30-day retention, to be confirmed with the chosen plan;
-restricted access) and text-free events to BigQuery, where dashboards and alerts run.
+model call and query). They are sent to Langfuse Cloud (EU or US region as the client prefers; 30-day retention, to be confirmed with the chosen plan;
+restricted access), where dashboards and the review of answers happen. Counts and timings go to
+Cloud Monitoring as metrics, where the alerts run.
 
 ### 5.8 Persona management (design)
 
@@ -774,8 +771,8 @@ up in the identity provider and attaches the role and brands found there. `chat-
 user's scope from exactly two callers, enforced by Cloud Run IAM: API Gateway (with the validated
 JWT) and the slack-adapter's service account (the Cloud Tasks delivery carries that account's
 OIDC token). A scope in a request from anyone else is rejected. The CEO role sees all brands; a `persona_admin` role may edit the tone. The SQL
-guard enforces the brand scope; BigQuery enforces PII removal and the k-anonymity threshold
-through views (section 5.2).
+guard enforces the brand scope and k-anonymity; BigQuery enforces PII removal through views
+(section 5.2).
 
 **Network and IAM.**
 - Cloud Run reaches Cloud SQL over a private IP (Serverless VPC Access); the database has no
@@ -815,8 +812,8 @@ cap bound the worst case.
 revision receives a small share of traffic first (canary) and is promoted if its metrics hold.
 
 **Data retention.** Conversations and Langfuse traces are kept for 30 days, database backups for
-7 days; traces are PII-redacted and access-restricted, and the BigQuery export contains no answer
-text; reports stay until their author deletes them (section 2.1, "What hard delete means here").
+7 days; traces are PII-redacted and access-restricted; reports stay until their author deletes
+them (section 2.1, "What hard delete means here").
 
 ---
 
@@ -852,4 +849,4 @@ The demo users are a brand manager (`anna`, `mark`) and the CEO (`ceo`), defined
 3. An evaluation harness over the Golden Bucket test split, wired into CI.
 4. User preferences with a `/prefs` command.
 5. Postgres checkpointer and report store; the Slack adapter.
-6. Authorized views and aggregation threshold rules in BigQuery; embeddings for retrieval.
+6. Authorized views in BigQuery; embeddings for retrieval.
