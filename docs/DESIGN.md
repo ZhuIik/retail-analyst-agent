@@ -679,8 +679,9 @@ Tools can also be limited to roles (the registry filters what each user's model 
 
 ## 8. Production operations
 
-**Non-functional requirements.** The client has not given these yet (asked); the design is
-sized for the following assumptions and they change configuration, not the architecture:
+**Non-functional requirements.** The brief does not set them, so the design is sized for the
+following assumptions; different numbers change configuration (instance limits, quotas,
+budgets), not the architecture:
 
 | Requirement | Assumption | What it drives |
 |---|---|---|
