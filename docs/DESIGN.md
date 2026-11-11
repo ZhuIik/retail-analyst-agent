@@ -679,18 +679,29 @@ Tools can also be limited to roles (the registry filters what each user's model 
 
 ## 8. Production operations
 
-**Non-functional requirements.** The brief does not set them, so the design is sized for the
-following assumptions; different numbers change configuration (instance limits, quotas,
-budgets), not the architecture:
+**Non-functional requirements** (from the client; items marked *assumed* are ours):
 
-| Requirement | Assumption | What it drives |
+| Requirement | Value | What it drives |
 |---|---|---|
-| Users | ~200 executives, ~10 questions each per working day | quotas, cost |
-| Concurrency | up to ~20 conversations at the same time | Cloud Run max instances and concurrency, Postgres connections |
-| Latency | median under 15 s, 95% under 45 s for analytical answers; progress shown while working | Flash rather than Pro; parallel queries; the 120 s turn deadline |
-| Availability | 99.5% in business hours; reports stay browsable when the model is down | managed services, model fallback chain |
-| Data loss | saved reports: RPO 1 hour, RTO 4 hours; open conversations may be lost | Cloud SQL backups and point-in-time recovery |
-| Monthly cost | ~44,000 questions × ≈ $0.02 ≈ **$900 for models** (≈ $1,550 after the January 2027 price change), plus ≈ $300–500 for Cloud Run, Cloud SQL and logging | budget alerts |
+| Load | ~100 active managers a day × ~10 questions ≈ **1,000 questions a day**; ~1 saved report per manager a day; tens to a few hundred executives in total | model quotas, cost, report storage (~100 rows a day) |
+| Concurrency | only a few users active at the same time | one or two Cloud Run instances with a ceiling of ~5; a small Postgres instance |
+| Data growth | ~1M new rows a day | BigQuery tables partitioned by date and clustered by product, so a query scans only the period and brands it needs; the dry-run cap catches the rest |
+| Latency | simple questions **10–30 s**, long reports **1–2 min** | Flash rather than Pro; parallel queries; progress shown while working; the turn deadline (120 s) matches the report ceiling |
+| Cost ceiling | **$1 per question**, configurable | a per-question budget (below) |
+| Availability *(assumed)* | business hours; saved reports stay browsable when the model is down | managed services, model fallback chain |
+| Data loss *(assumed)* | saved reports: RPO 1 hour, RTO 4 hours; open conversations may be lost | Cloud SQL backups and point-in-time recovery |
+
+**Per-question cost ceiling.** The budget is a setting (`max_cost_per_question_usd: 1.00`).
+Before each model call and query, `chat-api` adds up the cost so far: tokens × the model's
+price, plus BigQuery bytes billed × the on-demand price. If the next step would cross the
+ceiling, the turn ends with an honest partial answer, like the call limit does today. The
+expected cost (≈ $0.02, below) is about 50 times under the ceiling, so the ceiling only stops
+runaway turns. In the prototype the same role is played by the call limit, the turn deadline and
+the byte cap.
+
+**Monthly cost at this load:** ~22,000 questions × ≈ $0.02 ≈ **$450 for models** (≈ $770 after
+the January 2027 price change), plus ≈ $300–500 for Cloud Run, Cloud SQL and logging, so roughly
+**$750–1,300 a month**.
 
 **Identity and access.** The client's frontend issues a JWT. API Gateway validates its signature
 against the identity provider's public keys (JWKS); `chat-api` reads the user's role and brands
