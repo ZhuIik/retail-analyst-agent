@@ -46,6 +46,21 @@ what the model thinks.
 and guards; production adds the interface adapters, managed services and the quality layers that
 need data or budget the prototype does not have (section 2.3).
 
+**Where each requirement is answered**
+
+| # | Requirement | Section | In the prototype |
+|---|---|---|---|
+| 1 | Hybrid intelligence (Golden Bucket) | 5.1 | sample of 10 trios, BM25 retrieval, same safety validation |
+| 2 | Safety and PII | 5.2 | yes |
+| 3 | Destructive operations | 4.2, 5.3 | yes |
+| 4 | Continuous improvement | 5.4 | design only |
+| 5 | Resilience | 6 | yes (`--simulate` to watch it) |
+| 6 | Quality assurance | 5.6 | automated tests; evaluation designed |
+| 7 | Observability | 5.7 | yes (JSONL, `/trace`, optional Langfuse Cloud) |
+| 8 | Persona management | 5.8 | design only |
+| — | Cloud services, models, frameworks | 3 | — |
+| — | Data flow, error handling, setup | 4, 6, 9 | — |
+
 ---
 
 ## 2. Architecture
@@ -67,7 +82,9 @@ The system has two parts: the **request path** that answers a question in second
    verifies Slack's request signature, maps the Slack user to the user in the client's identity
    provider, acknowledges within Slack's 3-second limit, queues the turn in Cloud Tasks and edits
    its message as progress arrives (a Cloud Tasks delivery is an HTTP request, so Cloud Run keeps
-   CPU allocated for the whole turn). In Slack, deletion is confirmed with buttons.
+   CPU allocated for the whole turn). Answers in Slack are visible only to the asker (direct
+   messages, or ephemeral replies in a channel), because an answer is scoped to the asker's
+   brands; deletion is confirmed with buttons that only the requester can press.
 2. The agent calls Gemini on Vertex AI with the prompt and the tools; Gemini answers with tool
    calls.
 3. Every SQL statement the model writes goes to the SQL guard.
@@ -98,6 +115,7 @@ become candidate trios for the analysts, which closes the learning loop (require
 | Saved reports, audit log                            | Cloud SQL Postgres                      | reports private to the author; hard delete (see below); audit keeps who / when / which ids, never content |
 | User preferences                                    | Cloud SQL Postgres                      | fixed fields + free-text notes (requirement 4)                                                |
 | Persona / tone versions                             | Cloud SQL Postgres                      | versioned; the active version is a pointer (requirement 8)                                    |
+| Item table for scoping (brand, date, customer)      | BigQuery                                | denormalised `order_items`, clustered by brand, refreshed hourly by a scheduled query |
 | Golden Bucket trios and index                       | Cloud Storage                           | trios are the source of truth; the ingestion job publishes a versioned index file (BM25 statistics + embeddings) that chat-api loads into memory |
 | Metric glossary, schema descriptions, dialect rules | Git (config files)                      | reviewed changes, regression-tested                                                           |
 | Traces, metrics                                     | OpenTelemetry backend + BigQuery export | PII-redacted, access-restricted, retention-limited                                            |
@@ -106,10 +124,12 @@ become candidate trios for the analysts, which closes the learning loop (require
 **What "hard delete" means here.** A deleted report is removed from the reports table at once
 and cannot be restored through the product. Copies outside the table expire on a schedule: the
 conversation in which the report was written (30 days), database backups and point-in-time
-recovery (7 days), and the Langfuse trace of the turn that created the report (30 days; on
-deletion that trace is also deleted through the Langfuse API, using the trace id stored with the
-report). The BigQuery trace export never contains answer text. The audit row keeps only who
-deleted which ids and when.
+recovery (7 days), and the Langfuse traces of that conversation (the report text is part of the
+conversation history, so every later turn of it contains it; on deletion all traces of the
+session are deleted through the Langfuse API, using the session id stored with the report). The
+BigQuery trace export never contains answer text. A report already shown in Slack stays in Slack's
+history, which this system does not control. The audit row keeps only who deleted which ids and
+when.
 
 ### 2.2 The agent graph
 
@@ -119,8 +139,9 @@ deleted which ids and when.
   tables, metric glossary, SQL dialect rules, today's date and data range, the user's scope,
   and up to two Golden Bucket examples) plus a trimmed history. Function calling runs in mode
   `ANY`: the model cannot reply in free text, it must call a tool, and the final answer is the
-  `submit_answer` tool. Two ceilings end a runaway turn with an honest partial answer: 6 model
-  calls and 120 seconds per question. They are emergency limits, not the norm: across 35 traced
+  `submit_answer` tool. Two ceilings end a runaway turn with an honest partial answer: in the
+  prototype, 6 model calls and 120 seconds per question (production budgets per question type
+  are in section 8). They are emergency limits, not the norm: across 35 traced
   test questions the median was 2 model calls, and 32 of 35 needed 4 or fewer.
 - **tools** executes the model's tool calls through a registry. Each tool has a risk class
   (section 7): read-only tools run at once; `delete_reports` only finds the reports and records
@@ -141,7 +162,7 @@ deleted which ids and when.
 | Interface                             | Web chat, Slack/Teams adapters over one `chat-api`                | CLI (`analyst --user …`)                              |
 | Identity                              | JWT from the client's frontend, brands from claims                  | `--user` + `config/users.yaml`                       |
 | Agent graph, tools, `submit_answer` | same                                                                | same                                                     |
-| Brand scoping                         | SQL guard (database-level option in section 5.2)                    | SQL guard                                                |
+| Brand scoping                         | SQL guard over a brand-clustered item table (section 8; database-level option in 5.2) | SQL guard                                    |
 | PII                                   | guard **and** BigQuery views without PII columns                    | guard (the public dataset cannot carry our views)        |
 | k-anonymity                           | guard **and** a BigQuery aggregation threshold rule                 | guard + result suppression (min group 5)                 |
 | Deletion confirmation                 | same                                                                | same                                                     |
@@ -177,7 +198,8 @@ data is in **BigQuery** and the model is **Gemini**. On GCP:
 - **One identity system.** The agent's service account reads BigQuery and calls Vertex AI with
   IAM, no exported keys. From AWS it needs Workload Identity Federation for both.
 - **Data stays in one cloud.** Query results and prompts stay in Google Cloud on the request
-  path; the only copy outside is the trace in Langfuse Cloud, which the client approved.
+  path; outside copies are the traces in Langfuse Cloud (approved by the client) and the answers
+  users receive in Slack.
 - **The engine enforces privacy.** BigQuery authorized views and aggregation threshold rules
   give a second, database-level layer for PII and k-anonymity (section 5.2).
 
@@ -286,7 +308,7 @@ Example: a brand manager asks *"Why are customers in Texas spending less than in
 | 8 | Results are post-processed: small demographic groups removed, preview built | first 50 rows; wide rows as `column=value` | full result (up to 500 rows) in the conversation state |
 | 9 | Gemini reads the results (wrapped in `<data>` tags) and either queries again or calls `submit_answer` | — | — |
 | 10 | `finalize` formats the answer, applies the PII regex and the number check | answer text to the client | the answer in the conversation state; number check in the trace |
-| 11 | If the user says "save it", `save_report` stores **exactly the text that was shown** | — | report row (owner, title, body, question, SQL) |
+| 11 | If the user says "save it", `save_report` stores **exactly the text that was shown** | — | report row (owner, title, body, question, SQL, conversation id) |
 
 **What crosses each boundary.**
 - **To Gemini:** the question, the schema of the user's scoped tables, and query results that are
@@ -363,8 +385,8 @@ everything"*.
 - *Sources of candidates:* analysts write trios; answers that users corrected, rated down or
   re-asked are surfaced from traces; the nightly evaluation adds its failures.
 - *Two tiers:* **curated** trios, approved by an analyst in a review queue; and **automatic**
-  trios, added without a human when all of these hold: the answer was rated up by at least two
-  different users of the same scope; its SQL passes the guard and a dry-run again; an LLM judge
+  trios, added without a human when all of these hold: answers to this kind of question were rated
+  up in at least two separate conversations; its SQL passes the guard and a dry-run again; an LLM judge
   with a checklist (question understood, conclusions follow from the results, no numbers in the
   extracted approach) passes it; no safety flag was raised in the turn; and it is not a
   near-duplicate of an existing trio. Automatic trios have a lower retrieval weight and, until an
@@ -589,7 +611,7 @@ example, the trace of a failed answer showed `503 UNAVAILABLE: high demand` on b
 models, which led to adding a third fallback model.
 
 **Production.** The same events as OpenTelemetry spans (one trace per turn, one span per node,
-model call and query). A collector sends full traces to Langfuse Cloud (30-day retention,
+model call and query). A collector sends full traces to Langfuse Cloud (EU or US region as the client prefers; 30-day retention, to be confirmed with the chosen plan;
 restricted access) and text-free events to BigQuery, where dashboards and alerts run.
 
 ### 5.8 Persona management (design)
@@ -636,7 +658,8 @@ but an HTML 403 page from BigQuery.
   check the exact filter values (with `describe_data`), the date range of the data and the user's
   scope before saying "none". Groups hidden for privacy are reported as such, so the model does
   not chase a filter error that is not there.
-- *Budgets:* at most 6 model calls and 120 seconds per question, including retries and
+- *Budgets:* in the prototype at most 6 model calls and 120 seconds per question (production:
+  section 8), including retries and
   fallbacks (an honest partial answer when either is reached); queries above
   500 MB in the dry-run go back to the model; BigQuery rejects anything above 1 GB billed;
   `SELECT *` over tables is rejected; the model sees at most 50 rows per result; older tool
@@ -726,17 +749,18 @@ Measured on the current data, a one-month question about orders scans 5.5 MB for
 against 1.0 MB for the CEO. At ~30 bytes per row and ~1M rows a day that grows by ~30 MB a day
 and would hit the 500 MB dry-run threshold within weeks. Production therefore scopes through a
 **denormalised item table** (`order_items` with the product's brand, the order date and the
-customer), partitioned by date and clustered by brand:
-- the brand filter reads only the blocks of the user's brands (clustering), so a small brand
-  scans a small share of the table;
-- the guard copies the date range of the model's query into the scope filter, so partitions
-  outside the question's period are skipped;
-- queries without a period get a default window (for example the last 24 months), stated in the
-  answer's assumptions.
+customer), clustered by brand, so the scope filter reads only the blocks of the user's brands
+and a brand's queries scan roughly its share of the data. The scope itself is not cut by the
+question's dates: customer metrics such as churn or new versus returning customers need each
+customer's earlier purchases. The table is refreshed by a scheduled query every hour, so answers
+can lag the transaction logs by up to an hour; the answer's assumptions say so for "today"
+questions.
 
 **Budgets per type of question.** The client expects 10–30 s for a question and 1–2 minutes for a
 report. Production uses two budgets: a question gets up to 4 model calls and 45 s; a report (or a
 "why" analysis) gets a short plan step, up to 10 calls and 2 minutes, within the $1 cost ceiling.
+The model switches to the report budget by calling a `plan_report` tool, so classifying the
+question costs no extra call.
 The prototype uses one budget (6 calls, 120 s) because of the free tier's request limits.
 
 **Monthly cost at this load:** ~22,000 questions × ≈ $0.02 ≈ **$450 for models** (≈ $770 after
