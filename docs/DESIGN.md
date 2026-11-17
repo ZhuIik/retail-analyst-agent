@@ -55,7 +55,7 @@ was subsequently allowed, provided missing credentials never prevent operation.
 The workload and response-time figures in section 8 are planning targets discussed in the
 follow-up, not measured performance or a contractual availability SLA. The cloud topology,
 monthly cost estimate, retention defaults and choice of BM25 are design decisions. The VPS
-demo uses the smaller deployment described in [DEPLOYMENT.md](DEPLOYMENT.md).
+demo runs as a single containerized API instance on a VPS behind an HTTPS proxy.
 
 **Where each requirement is answered**
 

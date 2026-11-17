@@ -23,14 +23,14 @@ The design (architecture, decisions and trade-offs, production deployment) is in
 
 The HTTP adapter exposes `POST /v1/chat`, `GET /healthz` and interactive documentation at
 `/docs`. Bearer keys map to server-owned users; conversations enforce owner isolation and
-support the same deletion confirmation flow as the CLI. See [API setup and usage](docs/API.md).
+support the same deletion confirmation flow as the CLI.
 Hosted sessions use the server's Gemini key by default; reviewers can optionally supply their
 own Gemini key for an individual session.
 
 The [CI/CD workflow](.github/workflows/ci-cd.yml) runs lint, offline tests, lock-export validation,
 a Docker build and a container startup check. On `main`, it publishes the tested image to GHCR.
 Optional VPS delivery deploys an immutable image digest, checks container health and rolls back
-on a failed update. See [deployment instructions and operational limits](docs/DEPLOYMENT.md).
+on a failed update.
 
 ## Try the hosted CLI (no deployment)
 
@@ -69,7 +69,7 @@ per-turn execution limits also apply. Report commands do not spend the chat quot
 Each turn runs in a supervised process with a 120-second execution budget. If it expires,
 the worker is terminated and the conversation is reset; check saved reports before retrying
 a write because already committed operations are not rolled back.
-The server URL can be overridden with `--server`. See [API usage](docs/API.md).
+The server URL can be overridden with `--server`.
 
 ## Local quick start
 
