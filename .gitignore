@@ -5,6 +5,12 @@ notes/
 .env
 *.json.key
 *credentials*.json
+deploy/.env
+deploy/secrets/
+deploy/.deployed-image*
+deploy/.deploy.lock
+deploy/.staging/
+demo-access.json
 
 # Python
 __pycache__/

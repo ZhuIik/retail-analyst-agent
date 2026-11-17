@@ -27,6 +27,7 @@ class ModelSettings(BaseModel):
 
 class AgentSettings(BaseModel):
     max_llm_calls_per_turn: int = 6
+    max_tool_calls_per_turn: int = 12
     turn_timeout_s: int = 120
     max_sql_fix_attempts: int = 3
     history_messages: int = 12

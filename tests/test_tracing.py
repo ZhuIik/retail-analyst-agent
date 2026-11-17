@@ -66,3 +66,12 @@ def test_last_turn_returns_latest_trace_only(tmp_path) -> None:
     events = tracer.last_turn()
     assert [e["payload"]["q"] for e in events] == ["second"]
     assert all(e["trace_id"] == second for e in events)
+
+
+def test_session_credentials_are_removed_even_from_errors_and_keys(tmp_path):
+    secret = "reviewer-gemini-secret"
+    tracer = Tracer(tmp_path, "s", "alice", sensitive_values=(secret,))
+    tracer.event("error", detail=f"SDK error mentioning {secret}", nested={secret: [secret]})
+    text = tracer.path.read_text(encoding="utf-8")
+    assert secret not in text
+    assert "[secret]" in text

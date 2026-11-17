@@ -1,6 +1,6 @@
 # Retail Analyst Agent
 
-A command-line data-analysis agent for retail executives. It answers questions about sales,
+A data-analysis agent for retail executives, with CLI and HTTP interfaces. It answers questions about sales,
 customers and products in BigQuery's public `thelook_ecommerce` dataset, writes short reports
 with action items, and keeps a library of saved reports.
 
@@ -19,7 +19,59 @@ interprets the results; every protection is enforced by code around it, not by t
 The design (architecture, decisions and trade-offs, production deployment) is in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-## Quick start
+## HTTP API and CI/CD
+
+The HTTP adapter exposes `POST /v1/chat`, `GET /healthz` and interactive documentation at
+`/docs`. Bearer keys map to server-owned users; conversations enforce owner isolation and
+support the same deletion confirmation flow as the CLI. See [API setup and usage](docs/API.md).
+Hosted sessions use the server's Gemini key by default; reviewers can optionally supply their
+own Gemini key for an individual session.
+
+The [CI/CD workflow](.github/workflows/ci-cd.yml) runs lint, offline tests, lock-export validation,
+a Docker build and a container startup check. On `main`, it publishes the tested image to GHCR.
+Optional VPS delivery deploys an immutable image digest, checks container health and rolls back
+on a failed update. See [deployment instructions and operational limits](docs/DEPLOYMENT.md).
+
+## Try the hosted CLI (no deployment)
+
+With Python 3.11+ installed, clone this repository and run:
+
+```bash
+python client.py
+```
+
+Choose **Anna**, **Mark** or **CEO** from the menu; no password or access key is required.
+On Windows, double-clicking `START.cmd` launches the same CLI. To skip the menu:
+
+```bash
+python client.py --user anna
+```
+
+The client connects to `https://194.59.244.59` and needs no additional Python packages, Docker, SSH access,
+Google Cloud login or `.env`. The analysis runs on the hosted server; the interface stays in
+your terminal. Commands: `/reports`, `/trace`, `/new`, `/help`, `/quit`.
+
+The hosted demo uses the author's Gemini key by default. To use your own:
+
+```bash
+python client.py --own-gemini-key
+```
+
+You will be prompted for your Gemini key separately. Newly entered keys are not saved by the
+client. User selection simulates login for the public-data prototype, like the local CLI's
+`--user`; it is not production authentication. Anyone can select CEO. Each visitor gets an
+isolated report library and history, even when selecting the same persona. Restarting the client
+starts a new demo visit; `/new` starts a new conversation within the current visit.
+Demo access expires after one hour; a server restart clears conversations and temporary access.
+The public demo has a shared limit of 50 chat requests per UTC day, including confirmation replies
+and failed attempts. This counter persists across server restarts. Normal per-query cost and
+per-turn execution limits also apply. Report commands do not spend the chat quota.
+Each turn runs in a supervised process with a 120-second execution budget. If it expires,
+the worker is terminated and the conversation is reset; check saved reports before retrying
+a write because already committed operations are not rolled back.
+The server URL can be overridden with `--server`. See [API usage](docs/API.md).
+
+## Local quick start
 
 **Prerequisites**
 - [uv](https://docs.astral.sh/uv/) (installs Python 3.12 and the dependencies for you)

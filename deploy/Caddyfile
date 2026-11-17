@@ -1,0 +1,20 @@
+{
+	# IP clients commonly omit SNI; select the public certificate explicitly behind Docker NAT.
+	default_sni {$PUBLIC_ADDRESS}
+}
+
+https://{$PUBLIC_ADDRESS} {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+		}
+	}
+	request_body {
+		max_size 64KB
+	}
+	reverse_proxy api:8000 {
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+}

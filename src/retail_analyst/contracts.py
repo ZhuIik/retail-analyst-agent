@@ -296,6 +296,7 @@ class PendingDeletion(BaseModel):
 # --------------------------------------------------------------------------------------
 
 TraceEventType = Literal[
+    "final_answer",  # cleaned structured answer and text actually shown (bounded in JSONL)
     "turn_start",  # user message received
     "llm_call",  # model, prompt_version, tokens, latency, fallback_used
     "tool_call",  # tool name, args (SQL), result status, error_kind

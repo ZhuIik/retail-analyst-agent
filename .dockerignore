@@ -1,0 +1,12 @@
+# Explicit allowlist: assignment notes, credentials and runtime files cannot enter the build.
+**
+!Dockerfile
+!pyproject.toml
+!requirements.txt
+!README.md
+!src/
+!src/**
+!config/
+!config/**
+**/__pycache__/
+**/*.pyc

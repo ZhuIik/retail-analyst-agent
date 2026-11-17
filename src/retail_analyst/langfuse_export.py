@@ -22,7 +22,7 @@ def _mask(*, data: Any, **_: Any) -> Any:
     if isinstance(data, str):
         return redact_pii(data)[0]
     if isinstance(data, dict):
-        return {k: _mask(data=v) for k, v in data.items()}
+        return {redact_pii(str(k))[0]: _mask(data=v) for k, v in data.items()}
     if isinstance(data, list | tuple):
         return [_mask(data=v) for v in data]
     return data

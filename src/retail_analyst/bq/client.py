@@ -32,6 +32,7 @@ from google.cloud import bigquery
 
 from retail_analyst.config import Settings
 from retail_analyst.contracts import AgentError, ErrorKind, ExecResult, QueryMeta, TableData
+from retail_analyst.deadline import remaining_timeout
 from retail_analyst.faults import FaultInjector
 
 T = TypeVar("T")
@@ -119,7 +120,10 @@ class BigQueryClient:
         """Validate syntax/types and return the bytes the query would process (free)."""
         config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
         job, _ = self._with_retries(
-            lambda: self._client.query(sql, job_config=config, retry=_API_RETRY, job_retry=None), sql
+            lambda: self._client.query(
+                sql, job_config=config, retry=_API_RETRY, job_retry=None,
+                timeout=remaining_timeout(self._settings.sql.query_timeout_s),
+            ), sql
         )
         return int(job.total_bytes_processed or 0)
 
@@ -127,16 +131,21 @@ class BigQueryClient:
         sql_settings = self._settings.sql
         config = bigquery.QueryJobConfig(
             maximum_bytes_billed=sql_settings.max_bytes_billed,  # BigQuery itself enforces the cost cap
+            job_timeout_ms=max(1, int(remaining_timeout(sql_settings.query_timeout_s) * 1000)),
             labels=sanitize_labels(labels),
         )
 
         def attempt() -> tuple[bigquery.QueryJob, Any]:
+            config.job_timeout_ms = max(1, int(remaining_timeout(sql_settings.query_timeout_s) * 1000))
             if self._faults:
                 self._faults.before_bq_call()
-            job = self._client.query(sql, job_config=config, retry=_API_RETRY, job_retry=None)
+            job = self._client.query(
+                sql, job_config=config, retry=_API_RETRY, job_retry=None,
+                timeout=remaining_timeout(sql_settings.query_timeout_s),
+            )
             try:
                 rows = job.result(
-                    timeout=sql_settings.query_timeout_s,
+                    timeout=remaining_timeout(sql_settings.query_timeout_s),
                     max_results=sql_settings.stored_rows,
                     retry=_API_RETRY,
                     job_retry=None,
@@ -181,6 +190,7 @@ class BigQueryClient:
         """
         attempts, waited = 0, 0.0
         while True:
+            remaining_timeout(self._settings.sql.query_timeout_s)
             attempts += 1
             try:
                 return call(), attempts
@@ -191,6 +201,7 @@ class BigQueryClient:
                     kind is ErrorKind.TRANSIENT
                     and attempts <= self._settings.sql.max_transient_retries
                     and waited + delay <= _MAX_TOTAL_WAIT_S
+                    and delay < remaining_timeout(self._settings.sql.query_timeout_s)
                 )
                 if not retry:
                     raise self._to_agent_error(exc, kind, attempts, sql) from exc

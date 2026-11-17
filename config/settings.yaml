@@ -14,9 +14,10 @@ models:
   requests_per_minute: 14     # client-side rate limiter, just under the 15 RPM free-tier limit
 
 agent:
-  max_llm_calls_per_turn: 6   # hard limit incl. retries and fallbacks; the team asked for ~2-5 per question
+  max_llm_calls_per_turn: 6   # graph model invocations; each has bounded SDK retries/fallbacks
+  max_tool_calls_per_turn: 12  # bounds tool batches as well as the number of graph loops
   max_sql_fix_attempts: 3
-  turn_timeout_s: 120           # wall-clock budget for one question, then an honest partial answer
+  turn_timeout_s: 120           # supervised worker is terminated at this deadline, incl. startup/retries
   history_messages: 12        # older tool results are summarised before each agent call
 
 sql:

@@ -1,0 +1,31 @@
+name: retail-analyst
+services:
+  api:
+    image: ${ANALYST_IMAGE:?Set ANALYST_IMAGE to an immutable image digest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-adc.json
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - reports:/app/data
+      - traces:/app/traces
+      - ./secrets/google-adc.json:/run/secrets/google-adc.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 150s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  reports:
+  traces:

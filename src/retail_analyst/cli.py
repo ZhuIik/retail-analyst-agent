@@ -11,6 +11,7 @@ it is passed to the graph as Command(resume=...), and anything but the exact ans
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import sys
 import time
@@ -32,6 +33,7 @@ from retail_analyst.faults import FAULT_MODES, FaultInjector
 from retail_analyst.langfuse_export import LangfuseExport
 from retail_analyst.llm import build_analyst_model
 from retail_analyst.reports.store import ReportStore
+from retail_analyst.safety.pii import redact_pii
 from retail_analyst.tools.data_tools import register_data_tools
 from retail_analyst.tools.registry import ToolRegistry
 from retail_analyst.tools.report_tools import register_report_tools
@@ -59,23 +61,30 @@ _PROGRESS = {
 
 
 class Session:
-    def __init__(self, user: UserContext, settings: Settings, faults: FaultInjector | None) -> None:
+    def __init__(
+        self, user: UserContext, settings: Settings, faults: FaultInjector | None, *,
+        session_id: str | None = None, checkpointer=None, prompt_ctx: PromptContext | None = None, query_start: int = 1,
+    ) -> None:
         self.user, self.settings = user, settings
-        self.session_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
-        self.tracer = Tracer(settings.resolve(settings.tracing.dir), self.session_id, user.user_id)
+        self.session_id = session_id or f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
+        self.tracer = Tracer(
+            settings.resolve(settings.tracing.dir), self.session_id, user.user_id,
+            sensitive_values=(settings.google_api_key, settings.id_salt),
+        )
         self.langfuse = LangfuseExport()  # optional: only when LANGFUSE_* keys are set
         self.reports = ReportStore(settings.resolve(settings.reports.db_path))
         bq = BigQueryClient(settings, faults)
         # A separate client without fault injection: the simulated faults are kept for the demo questions.
-        prompt_ctx = _prompt_context(BigQueryClient(settings), settings.dataset)
+        prompt_ctx = prompt_ctx or _prompt_context(BigQueryClient(settings), settings.dataset)
         services = {
             "bq": bq,
             "reports": self.reports,
             "tracer": self.tracer,
-            "query_counter": itertools.count(1),
+            "query_counter": itertools.count(query_start),
             "prompt_ctx": prompt_ctx,
         }
         registry = ToolRegistry()
+        self._services = services
         register_data_tools(registry)
         register_report_tools(registry)
         self.graph = build_graph(
@@ -84,6 +93,7 @@ class Session:
             services,
             settings,
             make_prompt_fn(prompt_ctx, find_examples=self._golden_examples),
+            checkpointer=checkpointer,
         )
         self.thread = self.session_id
         self.started = False
@@ -107,21 +117,25 @@ class Session:
         run = self.langfuse.run_config(self.session_id, self.user.user_id, self.tracer.trace_id)
         return {"configurable": {"thread_id": self.thread}, **run}
 
-    def ask(self, text: str) -> None:
+    def ask(self, text: str, *, trace_id: str | None = None) -> None:
         if self.awaiting:
             # The user's thinking time does not count against the turn's deadline.
             payload: object = Command(resume=text, update={"turn_started_at": time.time()})
             self.awaiting = None
         else:
-            trace_id = self.tracer.new_turn()
+            trace_id = self.tracer.new_turn(trace_id)
             self.tracer.event(
-                "turn_start", question=text, prompt_version=PROMPT_VERSION, model=self.settings.models.analyst
+                "turn_start", question=text, prompt_version=PROMPT_VERSION, model=self.settings.models.analyst,
+                config_version=hashlib.sha256(self.settings.model_dump_json(
+                    exclude={"google_api_key", "id_salt"}
+                ).encode()).hexdigest()[:16],
             )
             payload = {
                 "messages": [HumanMessage(content=text)],
                 "question": text,
                 "trace_id": trace_id,
                 "llm_calls": 0,
+                "tool_calls_run": 0,
                 "sql_fix_attempts": 0,
                 "turn_started_at": time.time(),
                 "final_text": None,
@@ -165,6 +179,7 @@ class Session:
             for call in message.tool_calls:
                 describe = _PROGRESS.get(call["name"])
                 line = describe(call.get("args") or {}) if describe else call["name"]
+                line, _ = redact_pii(line)
                 console.print(f"[dim]· {line}[/]")
                 status.update(line + "…")
         elif isinstance(message, ToolMessage) and message.status == "error":
@@ -175,7 +190,7 @@ class Session:
         for col in ("id", "title", "created"):
             table.add_column(col)
         for r in payload["preview"]:
-            table.add_row(str(r["report_id"]), r["title"], r["created_at"][:16])
+            table.add_row(str(r["report_id"]), redact_pii(r["title"])[0], r["created_at"][:16])
         console.print(table)
         answer = payload["required_answer"]
         hint = "yes" if answer == "yes" else f"the number of reports ({answer})"
@@ -195,7 +210,7 @@ class Session:
         for col in ("id", "title", "created"):
             table.add_column(col)
         for r in rows:
-            table.add_row(str(r.report_id), r.title, r.created_at[:16])
+            table.add_row(str(r.report_id), redact_pii(r.title)[0], r.created_at[:16])
         console.print(table)
 
     def show_trace(self) -> None:
@@ -242,7 +257,9 @@ def main() -> None:
     except ValueError as e:
         parser.error(str(e))
     user = users[args.user]
-    session = Session(user, get_settings(), faults)
+    from retail_analyst.runtime import ProcessSession
+
+    session = ProcessSession(user, get_settings(), faults, console=True)
 
     console.print(f"[bold]Retail Analyst[/] — signed in as {user.display_name}")
     if not user.access.is_unrestricted:

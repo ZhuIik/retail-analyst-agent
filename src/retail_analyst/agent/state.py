@@ -22,6 +22,7 @@ class AgentState(TypedDict, total=False):
     queries: Annotated[dict[str, dict[str, Any]], merge_dicts]
     turn_started_at: float  # time.time() when the turn (or a resumed confirmation) started
     llm_calls: int  # in the current turn; hard limit from settings
+    tool_calls_run: int  # reset by caller per turn; bounds batches as well as model loops
     sql_fix_attempts: int  # consecutive fixable SQL errors in the current turn
     pending_deletion: dict[str, Any] | None  # PendingDeletion.model_dump() or None
     last_answer: dict[str, Any] | None  # AnswerSubmission.model_dump() of the last shown answer

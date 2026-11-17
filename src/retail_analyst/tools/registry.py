@@ -1,8 +1,10 @@
 """Tool registry: every capability is one entry with a risk class.
 
 The graph never special-cases a tool by name except `submit_answer` (which ends the turn).
-Protection is attached to the risk class: an INTERNAL_WRITE tool cannot change anything
-until the confirmation node approves it.
+INTERNAL_WRITE handlers are preparation functions: they MUST have no side effects and return
+pending_deletion for the confirmation node. The only supported executor is owner-scoped report
+deletion in that node. Risk metadata does not sandbox Python code. External tools are rejected
+until their preview, confirmation and execution policy has been implemented.
 """
 
 from __future__ import annotations
@@ -55,6 +57,8 @@ class ToolRegistry:
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
             raise ValueError(f"tool {spec.name!r} registered twice")
+        if spec.risk in {ToolRisk.EXTERNAL_WRITE, ToolRisk.EXTERNAL_READ}:
+            raise ValueError("External tools require an implemented execution policy before registration")
         self._tools[spec.name] = spec
 
     def get(self, name: str) -> ToolSpec | None:

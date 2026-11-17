@@ -12,7 +12,7 @@ One analyst model with tools; every protection is code around it:
 Caller contract, once per user message (a "turn"):
 
     graph.invoke({"messages": [HumanMessage(text)], "question": text, "trace_id": tracer.new_turn(),
-                  "llm_calls": 0, "sql_fix_attempts": 0, "final_text": None}, config)
+                  "llm_calls": 0, "tool_calls_run": 0, "sql_fix_attempts": 0, "final_text": None}, config)
 
 The per-turn counters are reset by the caller in that state update, never by the graph, so a turn
 cannot extend its own budget. The first turn also sets `user` (UserContext.model_dump()) and
@@ -46,6 +46,7 @@ from retail_analyst.contracts import (
     ErrorKind,
     PendingDeletion,
     ToolResult,
+    ToolRisk,
     UserContext,
 )
 from retail_analyst.safety.pii import redact_pii
@@ -242,7 +243,14 @@ def build_graph(
         except ValidationError as exc:
             return _error(f"Invalid arguments for {name}: {exc.errors(include_url=False)}")
         try:
-            return spec.handler(parsed, ctx)
+            # INTERNAL_WRITE is a prepare-only contract, not an arbitrary write executor.
+            outcome = spec.handler(parsed, ctx)
+            if spec.risk == ToolRisk.INTERNAL_WRITE and outcome.result.status == "ok":
+                pending = outcome.state_update.get("pending_deletion")
+                if not pending:
+                    return _error("Write preparation must return a deletion preview; no executor was invoked.")
+                PendingDeletion.model_validate(pending)
+            return outcome
         except AgentError as exc:
             tracer.event("error", source=name, kind=exc.kind.value, detail=exc.detail)
             if exc.kind.is_fatal:
@@ -262,11 +270,26 @@ def build_graph(
         fix_attempts = state.get("sql_fix_attempts", 0)
         fix_limit_hit = False
         fatal: AgentError | None = None
+        tool_calls_run = state.get("tool_calls_run", 0)
 
         for call in calls:
             if fatal:  # every tool call must get an answer, or the next turn's history is invalid
                 messages.append(_tool_message(call, _error("Not executed: the turn was stopped.").result))
                 continue
+            started = state.get("turn_started_at")
+            if started and time.time() - started > settings.agent.turn_timeout_s:
+                fatal = AgentError(ErrorKind.TRANSIENT, "The turn time budget is exhausted; no more tools were run.")
+                messages.append(_tool_message(call, _error(fatal.user_message).result))
+                continue
+            if fix_attempts >= settings.agent.max_sql_fix_attempts:
+                error = _error("SQL correction budget exhausted; submit an answer.")
+                messages.append(_tool_message(call, error.result))
+                continue
+            if tool_calls_run >= settings.agent.max_tool_calls_per_turn:
+                error = _error("Tool call budget exhausted; submit an answer.")
+                messages.append(_tool_message(call, error.result))
+                continue
+            tool_calls_run += 1
             ctx = ToolContext(
                 user=user,
                 settings=settings,
@@ -290,6 +313,7 @@ def build_graph(
                 query_id=result.query_id,
                 # What the model was told when a call failed: needed to debug self-correction.
                 message=result.message[:500] if result.status != "ok" else None,
+                result_preview=result.render_for_model(),  # tracer redacts, caps and marks truncation
             )
 
             awaits_confirmation = False
@@ -324,7 +348,7 @@ def build_graph(
             # A code-written stop message; finalize shows it as an "info" answer.
             update.pop("pending_deletion", None)
             messages.append(AIMessage(content=fatal.user_message))
-        return {**update, "messages": messages, "sql_fix_attempts": fix_attempts}
+        return {**update, "messages": messages, "sql_fix_attempts": fix_attempts, "tool_calls_run": tool_calls_run}
 
     def route_after_tools(state: AgentState) -> str:
         if state.get("pending_deletion"):
@@ -339,7 +363,9 @@ def build_graph(
         reply = interrupt(
             {
                 "type": "confirm_deletion",
-                "preview": [r.model_dump() for r in pending.preview],
+                "preview": [
+                    r.model_copy(update={"title": redact_pii(r.title)[0]}).model_dump() for r in pending.preview
+                ],
                 "required_answer": pending.required_answer,
             }
         )
@@ -382,6 +408,8 @@ def build_graph(
         else:  # a code-written stop message (call limit, LLM outage) or plain model text
             answer = AnswerSubmission(kind="info", message=ai.text)
         text, hits = redact_pii(format_answer(answer))
+        tracer.event("final_answer", answer=answer.model_dump(), final_text=text,
+                     query_ids=_turn_query_ids(state["messages"]))
         if hits:
             tracer.event("pii_redaction", where="answer", hits=hits)
         if unverified := check_numbers(answer, state.get("queries") or {}):
@@ -415,7 +443,7 @@ def build_graph(
 
 def _tool_message(call: Mapping[str, Any], result: ToolResult) -> ToolMessage:
     return ToolMessage(
-        content=result.render_for_model(),
+        content=redact_pii(result.render_for_model())[0],
         tool_call_id=call["id"],
         name=call["name"],
         status="error" if result.status == "error" else "success",

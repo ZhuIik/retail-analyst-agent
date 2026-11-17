@@ -60,10 +60,10 @@ def _save_report(args: SaveReportArgs, ctx: ToolContext) -> ToolOutcome:
     question, _ = redact_pii(last.get("question", ""))
     report = _store(ctx).save(
         owner_id=ctx.user.user_id,
-        title=args.title.strip(),
+        title=redact_pii(args.title.strip())[0],
         body=body,
         question=question,
-        sql=sql,
+        sql=[redact_pii(query)[0] for query in sql],
         session_id=ctx.session_id,
     )
     return ToolOutcome(ToolResult(status="ok", message=f"Saved report #{report.report_id} '{report.title}'."))

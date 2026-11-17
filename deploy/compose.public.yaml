@@ -1,0 +1,24 @@
+# Enable with COMPOSE_FILE=compose.yaml:compose.public.yaml in the VPS .env file.
+services:
+  gateway:
+    image: caddy:2.11.9@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
+    restart: unless-stopped
+    environment:
+      PUBLIC_ADDRESS: ${PUBLIC_ADDRESS:?Set the public IP or hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  caddy_data:
+  caddy_config:

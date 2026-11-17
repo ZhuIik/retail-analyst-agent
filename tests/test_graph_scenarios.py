@@ -77,6 +77,7 @@ class Harness:
                 "session_id": "s1",
                 "trace_id": f"trace-{text}",
                 "llm_calls": 0,
+                "tool_calls_run": 0,
                 "sql_fix_attempts": 0,
                 "final_text": None,
             },

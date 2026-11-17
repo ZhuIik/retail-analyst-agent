@@ -32,18 +32,21 @@ MAX_STRING_CHARS = 4000
 
 
 class Tracer:
-    def __init__(self, trace_dir: Path, session_id: str, user_id: str) -> None:
+    def __init__(
+        self, trace_dir: Path, session_id: str, user_id: str, *, sensitive_values: tuple[str, ...] = ()
+    ) -> None:
         self.path = Path(trace_dir) / f"{session_id}.jsonl"
         self.session_id = session_id
         self.user_id = user_id
         self._trace_id: str | None = None
+        self._sensitive_values = tuple(v for v in sensitive_values if v)
 
     @property
     def trace_id(self) -> str | None:
         return self._trace_id
 
-    def new_turn(self) -> str:
-        self._trace_id = uuid.uuid4().hex[:12]
+    def new_turn(self, trace_id: str | None = None) -> str:
+        self._trace_id = trace_id or uuid.uuid4().hex[:12]
         return self._trace_id
 
     def event(self, type: TraceEventType, **payload: object) -> None:
@@ -55,7 +58,7 @@ class Tracer:
                 "trace_id": self._trace_id,
                 "user_id": self.user_id,
                 "type": type,
-                "payload": _clean(payload),
+                "payload": _clean(payload, self._sensitive_values),
             }
             line = json.dumps(record, ensure_ascii=False, default=str)
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,19 +85,21 @@ class Tracer:
         return [e for e in events if e.get("trace_id") == latest]
 
 
-def _clean(value: Any) -> Any:
+def _clean(value: Any, sensitive_values: tuple[str, ...] = ()) -> Any:
     """Redact PII from every string (also inside nested dicts/lists) and cap its length."""
     if isinstance(value, str):
+        for secret in sensitive_values:
+            value = value.replace(secret, "[secret]")
         text, _ = redact_pii(value)
         if len(text) > MAX_STRING_CHARS:
             text = f"{text[:MAX_STRING_CHARS]}... [truncated {len(text) - MAX_STRING_CHARS} chars]"
         return text
     if isinstance(value, BaseModel):
-        return _clean(value.model_dump(mode="json"))
+        return _clean(value.model_dump(mode="json"), sensitive_values)
     if isinstance(value, dict):
-        return {str(k): _clean(v) for k, v in value.items()}
+        return {_clean(str(k), sensitive_values): _clean(v, sensitive_values) for k, v in value.items()}
     if isinstance(value, list | tuple | set):
-        return [_clean(v) for v in value]
+        return [_clean(v, sensitive_values) for v in value]
     if value is None or isinstance(value, bool | int | float):
         return value
-    return _clean(str(value))
+    return _clean(str(value), sensitive_values)
